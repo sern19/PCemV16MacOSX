@@ -26,6 +26,7 @@ typedef struct pc1512_t
         
         uint8_t plane_write, plane_read, border;
 
+	int fontbase;
         int linepos, displine;
         int sc, vc;
         int cgadispon;
@@ -35,7 +36,8 @@ typedef struct pc1512_t
         int dispon;
         int blink;
         
-        int dispontime, dispofftime, vidtime;
+        uint64_t dispontime, dispofftime;
+	pc_timer_t timer;
         int firstline, lastline;
         
         uint8_t *vram;
@@ -105,7 +107,8 @@ static uint8_t pc1512_in(uint16_t addr, void *p)
                 case 0x3d5:
                 return pc1512->crtc[pc1512->crtcreg];
                 case 0x3da:
-                return pc1512->stat;
+                pc1512->stat ^= 0x01; /*Bit 0 is toggle bit on PC1512*/
+                return pc1512->stat ^ 0x01;
         }
         return 0xff;
 }
@@ -146,15 +149,15 @@ static uint8_t pc1512_read(uint32_t addr, void *p)
 static void pc1512_recalctimings(pc1512_t *pc1512)
 {
 	double _dispontime, _dispofftime, disptime;
-        disptime = 128; /*Fixed on PC1512*/
+        disptime = 114; /*Fixed on PC1512*/
         _dispontime = 80;
         _dispofftime = disptime - _dispontime;
 //        printf("%i %f %f %f  %i %i\n",cgamode&1,disptime,dispontime,dispofftime,crtc[0],crtc[1]);
         _dispontime  *= CGACONST;
         _dispofftime *= CGACONST;
 //        printf("Timings - on %f off %f frame %f second %f\n",dispontime,dispofftime,(dispontime+dispofftime)*262.0,(dispontime+dispofftime)*262.0*59.92);
-	pc1512->dispontime  = (int)(_dispontime * (1 << TIMER_SHIFT));
-	pc1512->dispofftime = (int)(_dispofftime * (1 << TIMER_SHIFT));
+	pc1512->dispontime  = (uint64_t)_dispontime;
+	pc1512->dispofftime = (uint64_t)_dispofftime;
 }
 
 static void pc1512_poll(void *p)
@@ -171,8 +174,7 @@ static void pc1512_poll(void *p)
 
         if (!pc1512->linepos)
         {
-                pc1512->vidtime += pc1512->dispofftime;
-                pc1512->stat |= 1;
+                timer_advance_u64(&pc1512->timer, pc1512->dispofftime);
                 pc1512->linepos = 1;
                 oldsc = pc1512->sc;
                 if (pc1512->dispon)
@@ -220,12 +222,12 @@ static void pc1512_poll(void *p)
                                         if (drawcursor)
                                         {
                                                 for (c = 0; c < 8; c++)
-                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 3) + c + 8] = cols[(fontdat[chr][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0] ^ 15;
+                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 3) + c + 8] = cols[(fontdat[chr + pc1512->fontbase][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0] ^ 0xffffff;
                                         }
                                         else
                                         {
                                                 for (c = 0; c < 8; c++)
-                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 3) + c + 8] = cols[(fontdat[chr][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0];
+                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 3) + c + 8] = cols[(fontdat[chr + pc1512->fontbase][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0];
                                         }
                                         pc1512->ma++;
                                 }
@@ -254,13 +256,13 @@ static void pc1512_poll(void *p)
                                         {
                                                 for (c = 0; c < 8; c++)
                                                         ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 8] = 
-                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 1 + 8] = cols[(fontdat[chr][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0] ^ 0xffffff;
+                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 1 + 8] = cols[(fontdat[chr + pc1512->fontbase][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0] ^ 0xffffff;
                                         }
                                         else
                                         {
                                                 for (c = 0; c < 8; c++)
                                                         ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 8] = 
-                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 1 + 8] = cols[(fontdat[chr][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0];
+                                                        ((uint32_t *)buffer32->line[pc1512->displine])[(x << 4) + (c << 1) + 1 + 8] = cols[(fontdat[chr + pc1512->fontbase][pc1512->sc & 7] & (1 << (c ^ 7))) ? 1 : 0];
                                         }
                                 }
                         }
@@ -337,11 +339,9 @@ static void pc1512_poll(void *p)
         }
         else
         {
-                pc1512->vidtime += pc1512->dispontime;
+                timer_advance_u64(&pc1512->timer, pc1512->dispontime);
                 if ((pc1512->lastline - pc1512->firstline) == 199) 
                         pc1512->dispon = 0; /*Amstrad PC1512 always displays 200 lines, regardless of CRTC settings*/
-                if (pc1512->dispon) 
-                        pc1512->stat &= ~1;
                 pc1512->linepos = 0;
                 if (pc1512->vsynctime)
                 {
@@ -451,6 +451,7 @@ static void pc1512_poll(void *p)
 
 static void *pc1512_init()
 {
+	int display_type;
         pc1512_t *pc1512 = malloc(sizeof(pc1512_t));
         memset(pc1512, 0, sizeof(pc1512_t));
 
@@ -458,10 +459,13 @@ static void *pc1512_init()
         
         pc1512->cgacol = 7;
         pc1512->cgamode = 0x12;
-                
-        timer_add(pc1512_poll, &pc1512->vidtime, TIMER_ALWAYS_ENABLED, pc1512);
+	pc1512->fontbase = (device_get_config_int("codepage") & 3) * 256;
+	display_type = device_get_config_int("display_type");              
+ 
+        timer_add(&pc1512->timer, pc1512_poll, pc1512, 1);
         mem_mapping_add(&pc1512->mapping, 0xb8000, 0x08000, pc1512_read, NULL, NULL, pc1512_write, NULL, NULL,  NULL, 0, pc1512);
         io_sethandler(0x03d0, 0x0010, pc1512_in, NULL, NULL, pc1512_out, NULL, NULL, pc1512);
+	cgapal_rebuild(display_type, 0);
         return pc1512;
 }
 
@@ -480,6 +484,57 @@ static void pc1512_speed_changed(void *p)
         pc1512_recalctimings(pc1512);
 }
 
+device_config_t pc1512_config[] =
+{
+        {
+                .name = "display_type",
+                .description = "Display type",
+                .type = CONFIG_SELECTION,
+                .selection =
+                {
+                        {
+                                .description = "PC-CM (Colour)",
+                                .value = DISPLAY_RGB
+                        },
+			{
+				.description = "PC-MM (Monochrome)",
+				.value = DISPLAY_WHITE
+			},
+			{
+                                .description = ""
+                        }
+		}
+	},
+	{
+                .name = "codepage",
+                .description = "Hardware font",
+                .type = CONFIG_SELECTION,
+		.selection =
+		{
+			{
+				.description = "US English",
+				.value = 3
+			},
+			{
+				.description = "Danish",
+				.value = 1
+			},
+			{
+				.description = "Greek",
+				.value = 0
+			},
+			{
+                                .description = ""
+                        }
+		},
+                .default_int = 3
+        },
+        {
+                .type = -1
+        }
+};
+
+
 device_t pc1512_device =
 {
         "Amstrad PC1512 (video)",
@@ -489,5 +544,6 @@ device_t pc1512_device =
         NULL,
         pc1512_speed_changed,
         NULL,
-        NULL
+        NULL,
+	pc1512_config
 };

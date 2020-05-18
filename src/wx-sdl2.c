@@ -17,13 +17,13 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <math.h>
-
 #ifdef __APPLE__
 #include <sys/types.h>
 #include <sys/stat.h>
 #endif
-
 #include "ibm.h"
+#include "device.h"
+#include "cassette.h"
 #include "cdrom-ioctl.h"
 #include "cdrom-image.h"
 #include "config.h"
@@ -234,25 +234,20 @@ int dir_exists(char* path)
 
 void get_pcem_path(char *s, int size)
 {
-
 #ifdef __linux
-
-    wx_get_home_directory(s);
-    strcat(s, ".pcem/");
-
+        wx_get_home_directory(s);
+        strcat(s, ".pcem/");
 #elif defined __APPLE__
+        wx_get_home_directory(s);
+        strcat(s, "Library/Application Support/PCem/");
 
-    wx_get_home_directory(s);
-    strcat(s, "Library/Application Support/PCem/");
+        struct stat st = {0};
 
-    struct stat st = {0};
-
-    // create ~/Library/Application Support/PCem/
-    // if it doesn't exist
-    if (stat(s, &st) == -1) {
-        mkdir(s, 0700);
-    }
-
+        // create ~/Library/Application Support/PCem/
+        // if it doesn't exist
+        if (stat(s, &st) == -1) {
+            mkdir(s, 0700);
+        }
 #else
         char* path = SDL_GetBasePath();
         strcpy(s, path);
@@ -921,6 +916,22 @@ int wx_handle_command(void* hwnd, int wParam, int checked)
         {
                 zip_eject();
         }
+        else if (ID_IS("IDM_CASSETTE_LOAD"))
+        {
+                if (!getfile(hwnd,
+                                "Tape image (*.pzxi;*.pzx)|*.pzxi;*.pzx|All files (*.*)|*.*",
+                                cassettefn))
+                {
+                        cassette_eject();
+                        cassette_load(openfilestring);
+                        saveconfig(NULL);
+                }
+        }
+	else if (ID_IS("IDM_CASSETTE_EJECT"))
+	{
+		cassette_eject();
+                saveconfig(NULL);
+	}
         else if (ID_IS("IDM_MACHINE_TOGGLE"))
         {
                 if (emulation_state != EMULATION_STOPPED)

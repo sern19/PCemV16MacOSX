@@ -164,7 +164,7 @@ typedef struct scsi_cd_data_t
         int blocks;
         
         int cmd_pos, new_cmd_pos;
-        int callback;
+	pc_timer_t callback_timer;
         int wait_time;
         scsi_bus_t *bus;
         
@@ -204,6 +204,8 @@ typedef struct scsi_cd_data_t
         
         int short_seek, long_seek;
         int max_speed, cur_speed;
+
+        int cur_model;
 } scsi_cd_data_t;
 
 static scsi_cd_data_t *cd_data = NULL;
@@ -266,24 +268,161 @@ void cd_set_speed(int speed)
         }
 }
 
+static struct
+{
+        // suffix numbers are sizes from the specs
+        char	*vendor_8;
+        char 	*model_and_firmware_40;
+        char	*serial_20;
+        char	*model_16;
+        char	*firmware_4;
+
+        char	*serial2_20;
+        char	*firmware2_8;
+        char	*model2_40;
+
+        // for PCem config only
+        char	*model_string_40;
+        char	*model_config_string_40;
+        int      interfaces;
+        int      speed; // Not an index, but a "speed" value. -1 == allow override
+} const cd_models[] =
+{
+        {
+                // Generic PCem CD
+                "PCem",
+                "PCemCD v1.0",
+                "53R141",
+                "PCemCD",
+                "1.0",
+
+                "",
+                "v1.0",
+                "PCemCD",
+                "PCemCD",
+                "pcemcd",
+                CD_MODEL_INTERFACE_ALL,
+                -1,
+        },
+        {
+                // A 4x CD-ROM drive from Aztech. Choose if your system image has the SGIDECD.SYS driver
+                "AZT",
+                "AZT 46802I v1.15",
+                "53R141", // TODO: clone serial from my real one
+                "46802I",
+                "1.15",
+
+                "",
+                "v1.15",
+                "CDA46802I",
+                "AZT CDA 468-02I 4X",
+                "azt_cda_468_02i_4x",
+                CD_MODEL_INTERFACE_IDE,
+                4,
+        },
+};
+
+char *cd_model = NULL;
+
+char *cd_get_model(int i)
+{
+        return cd_models[i].model_string_40;
+}
+
+char *cd_get_config_model(int i)
+{
+        return cd_models[i].model_config_string_40;
+}
+
+void cd_set_model(char *model)
+{
+        if (cd_data)
+        {
+                int c = 0;
+
+                while (1)
+                {
+                        if (!model)
+                                break;
+                        if (c > MAX_CD_MODEL)
+                                break;
+                        if (!strncmp(cd_models[c].model_string_40, model, 40))
+                                break;
+
+                        c++;
+                }
+
+                cd_data->cur_model = c;
+        }
+}
+
+int cd_get_model_interfaces(int i)
+{
+        return cd_models[i].interfaces;
+}
+
+int cd_get_model_speed(int i)
+{
+        return cd_models[i].speed;
+}
+
+char *cd_model_to_config(char *model)
+{
+        int c = 0;
+
+        while (1)
+        {
+                if (!model)
+                        break;
+                if (c > MAX_CD_MODEL)
+                {
+                        c = 0; // default
+                        break;
+                }
+                if (!strncmp(cd_models[c].model_string_40, model, 40))
+                        break;
+
+                c++;
+        }
+        return cd_models[c].model_config_string_40;
+}
+
+char *cd_model_from_config(char *config)
+{
+        int c = 0;
+
+        while (1)
+        {
+                if (!config)
+                        break;
+                if (c > MAX_CD_MODEL)
+                {
+                        c = 0; // default
+                        break;
+                }
+                if (!strncmp(cd_models[c].model_config_string_40, config, 40))
+                        break;
+
+                c++;
+        }
+        return cd_models[c].model_string_40;
+}
+
 static void scsi_cd_callback(void *p)
 {
         scsi_cd_data_t *data = p;
-        
+
         if (data->cmd_pos == CMD_POS_WAIT)
         {
                 data->wait_time--;
                 if (!data->wait_time)
                 {
-                        data->callback = 0;
                         data->cmd_pos = data->new_cmd_pos;
                         scsi_bus_kick(data->bus);
                 }
                 else
-                        data->callback = 1000 * TIMER_USEC;
+                        timer_advance_u64(&data->callback_timer, 1000 * TIMER_USEC);
         }
-        else
-                data->callback = 0;
 }
 
 //#define SECTOR_TIME 13333 /*Time between sectors on 1x drive*/
@@ -397,10 +536,11 @@ static void *scsi_cd_init(scsi_bus_t *bus, int id)
 	memset(mode_pages_in[GPMODE_CDROM_AUDIO_PAGE], 0, 256);	/* Clear the page itself. */
 	page_flags[GPMODE_CDROM_AUDIO_PAGE] &= ~PAGE_CHANGED;
 
-        timer_add(scsi_cd_callback, &data->callback, &data->callback, data);
+        timer_add(&data->callback_timer, scsi_cd_callback, data, 0);
         
         cd_data = data;
         cd_set_speed(cd_speed);
+        cd_set_model(cd_model);
                 
         return data;
 }
@@ -421,6 +561,14 @@ static void scsi_cd_close(void *p)
         
         cd_data = NULL;
         free(data);
+}
+
+static void scsi_cd_reset(void *p)
+{
+        scsi_cd_data_t *data = p;
+
+        timer_disable(&data->callback_timer);
+        data->cmd_pos = CMD_POS_IDLE;
 }
 
 static void scsi_cd_illegal(scsi_cd_data_t *data)
@@ -697,7 +845,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                                 data->cmd_pos = CMD_POS_WAIT;
                                 data->new_cmd_pos = CMD_POS_COMPLETE;
                                 data->wait_time = seek_time;
-                                data->callback = 1000 * TIMER_USEC;
+                                timer_set_delay_u64(&data->callback_timer, 1000 * TIMER_USEC);
                                 return SCSI_PHASE_COMMAND;
                         }
                 }
@@ -745,7 +893,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 		atapi_sense_clear(data, temp_command, 0);
 
 		data->bytes_expected = data->data_pos_write = MIN(alloc_length, 18);
-		return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case SCSI_SEEK_6:
                 if (data->cmd_pos == CMD_POS_IDLE)
@@ -761,7 +909,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                                 data->cmd_pos = CMD_POS_WAIT;
                                 data->new_cmd_pos = CMD_POS_COMPLETE;
                                 data->wait_time = seek_time;
-                                data->callback = 1000 * TIMER_USEC;
+                                timer_set_delay_u64(&data->callback_timer, 1000 * TIMER_USEC);
                                 return SCSI_PHASE_COMMAND;
                         }
                 }
@@ -795,7 +943,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 			
                 data->data_pos_read = 0;
                 data->bytes_expected = data->data_pos_write = MIN(alloc_length, 8);
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case GPCMD_READ_TOC_PMA_ATIP:
 //                pclog("Read TOC ready? %08X\n",ide);
@@ -826,7 +974,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                 }
                 data->data_pos_read = 0;
                 data->bytes_expected = data->data_pos_write = MIN(alloc_length, len);
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case GPCMD_READ_CD:
 //                pclog("Read CD : start LBA %02X%02X%02X%02X Length %02X%02X%02X Flags %02X\n",cdb[2],cdb[3],cdb[4],cdb[5],cdb[6],cdb[7],cdb[8],cdb[9]);
@@ -862,7 +1010,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                                 data->cmd_pos = CMD_POS_WAIT;
                                 data->new_cmd_pos = CMD_POS_START_SECTOR;
                                 data->wait_time = seek_time;
-                                data->callback = 1000 * TIMER_USEC;
+                                timer_set_delay_u64(&data->callback_timer, 1000 * TIMER_USEC);
                                 return SCSI_PHASE_COMMAND;
                         }
                 }
@@ -875,23 +1023,21 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                 }
                 if (data->cmd_pos == CMD_POS_START_SECTOR)
                 {
-                        uint64_t time = (((uint64_t)SECTOR_TIME * (uint64_t)TIMER_USEC) / data->cur_speed) * (uint64_t)data->cdlen;
+                        uint64_t time = (((uint64_t)SECTOR_TIME * TIMER_USEC) / data->cur_speed) * (uint64_t)data->cdlen;
 
                         data->cmd_pos = CMD_POS_WAIT;
                         data->new_cmd_pos = CMD_POS_TRANSFER;
-                        
-                        if (time > 0x7fffffffull)
+
+                        if (time > (TIMER_USEC * 1000ull))
                         {
-                                data->wait_time = (int)(time / ((uint64_t)TIMER_USEC * 1000ull));
-                                data->callback = (int)(time % ((uint64_t)TIMER_USEC * 1000ull));;
+                                data->wait_time = (int)(time / (TIMER_USEC * 1000ull));
+                                timer_set_delay_u64(&data->callback_timer, time % (TIMER_USEC * 1000ull));
                         }
                         else
                         {
-                                data->callback = time;
+                                timer_set_delay_u64(&data->callback_timer, time);
                                 data->wait_time = 1;
                         }
-                        if (data->callback == 0)
-                                data->callback = 1;
                         return SCSI_PHASE_COMMAND;
                 }
 
@@ -969,7 +1115,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                                 data->cmd_pos = CMD_POS_WAIT;
                                 data->new_cmd_pos = CMD_POS_START_SECTOR;
                                 data->wait_time = seek_time;
-                                data->callback = 1000 * TIMER_USEC;
+                                timer_set_delay_u64(&data->callback_timer, 1000 * TIMER_USEC);
                                 return SCSI_PHASE_COMMAND;
                         }
                 }
@@ -982,23 +1128,21 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                 }
                 if (data->cmd_pos == CMD_POS_START_SECTOR)
                 {
-                        uint64_t time = (((uint64_t)SECTOR_TIME * (uint64_t)TIMER_USEC) / data->cur_speed) * (uint64_t)data->cdlen;
+                        uint64_t time = (((uint64_t)SECTOR_TIME * TIMER_USEC) / data->cur_speed) * (uint64_t)data->cdlen;
 
                         data->cmd_pos = CMD_POS_WAIT;
                         data->new_cmd_pos = CMD_POS_TRANSFER;
                         
-                        if (time > 0x7fffffffull)
+                        if (time > (TIMER_USEC * 1000ull))
                         {
-                                data->wait_time = (int)(time / ((uint64_t)TIMER_USEC * 1000ull));
-                                data->callback = (int)(time % ((uint64_t)TIMER_USEC * 1000ull));;
+                                data->wait_time = (int)(time / (TIMER_USEC * 1000ull));
+                                timer_set_delay_u64(&data->callback_timer, time % (TIMER_USEC * 1000ull));
                         }
                         else
                         {
-                                data->callback = time;
+                                timer_set_delay_u64(&data->callback_timer, time);
                                 data->wait_time = 1;
                         }
-                        if (data->callback == 0)
-                                data->callback = 1;
                         return SCSI_PHASE_COMMAND;
                 }
                 
@@ -1031,7 +1175,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                 data->data_in[1] = data->data_in[2] = data->data_in[3] = 0;
                 
                 data->bytes_expected = data->data_pos_write = MIN(6, alloc_length);
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
 		case GPCMD_MODE_SENSE_6:
 		case GPCMD_MODE_SENSE_10:
@@ -1069,7 +1213,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 
                 data->bytes_expected = data->data_pos_write = MIN(len, alloc_length);
                 data->cmd_pos = CMD_POS_IDLE;
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
 		case GPCMD_MODE_SELECT_6:
                 case GPCMD_MODE_SELECT_10:
@@ -1175,7 +1319,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 
                 data->bytes_expected = data->data_pos_write = MIN(alloc_length, len);
                 data->cmd_pos = CMD_POS_IDLE;
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
 		case GPCMD_READ_DISC_INFORMATION:
                 alloc_length = cdb[8] | (cdb[7] << 8);
@@ -1191,7 +1335,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 			
                 data->bytes_expected = data->data_pos_write = MIN(alloc_length, 34);
                 data->cmd_pos = CMD_POS_IDLE;
-                return SCSI_PHASE_DATA_IN;
+                return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case GPCMD_PLAY_AUDIO_10:
                 case GPCMD_PLAY_AUDIO_12:
@@ -1244,7 +1388,7 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
                 if (!(cdb[2] & 0x40)) len=4;
 
 		data->bytes_expected = data->data_pos_write = MIN(alloc_length, len);
-		return SCSI_PHASE_DATA_IN;
+		return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case GPCMD_START_STOP_UNIT:
                 if (!cdb[4])          atapi->stop();
@@ -1298,11 +1442,11 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 				data->data_in[idx++] = 0x01;
 				data->data_in[idx++] = 0x00;
 				data->data_in[idx++] = 68;
-				ide_padstr8(data->data_in + idx, 8, "PCem"); /* Vendor */
+				ide_padstr8(data->data_in + idx, 8, cd_models[cd_data->cur_model].vendor_8); /* Vendor */
 				idx += 8;
-				ide_padstr8(data->data_in + idx, 40, "PCemCD v1.0"); /* Product */
+				ide_padstr8(data->data_in + idx, 40, cd_models[cd_data->cur_model].model_and_firmware_40); /* Product */
 				idx += 40;
-				ide_padstr8(data->data_in + idx, 20, "53R141"); /* Product */
+				ide_padstr8(data->data_in + idx, 20, cd_models[cd_data->cur_model].serial_20); /* Product */
 				idx += 20;				
 				break;
 				
@@ -1333,9 +1477,9 @@ static int scsi_cd_command(uint8_t *cdb, void *p)
 			data->data_in[6] = 0;
 			data->data_in[7] = 0;
 
-                        ide_padstr8(data->data_in + 8, 8, "PCem"); /* Vendor */
-                        ide_padstr8(data->data_in + 16, 16, "PCemCD"); /* Product */
-                        ide_padstr8(data->data_in + 32, 4, "1.0"); /* Revision */
+                        ide_padstr8(data->data_in + 8, 8, cd_models[cd_data->cur_model].vendor_8); /* Vendor */
+                        ide_padstr8(data->data_in + 16, 16, cd_models[cd_data->cur_model].model_16); /* Product */
+                        ide_padstr8(data->data_in + 32, 4, cd_models[cd_data->cur_model].firmware_4); /* Revision */
 					
                         idx = 36;
 		}
@@ -1344,7 +1488,7 @@ atapi_out:
 		data->data_in[size_idx] = idx - preamble_len;
 				
 		data->bytes_expected = data->data_pos_write = MIN(alloc_length, idx);
-		return SCSI_PHASE_DATA_IN;
+		return alloc_length ? SCSI_PHASE_DATA_IN : SCSI_PHASE_STATUS;
 
                 case GPCMD_PREVENT_REMOVAL:
                 data->cmd_pos = CMD_POS_IDLE;
@@ -1372,7 +1516,7 @@ atapi_out:
                                 data->cmd_pos = CMD_POS_WAIT;
                                 data->new_cmd_pos = CMD_POS_COMPLETE;
                                 data->wait_time = seek_time;
-                                data->callback = 1000 * TIMER_USEC;
+                                timer_set_delay_u64(&data->callback_timer, 1000 * TIMER_USEC);
                                 return SCSI_PHASE_COMMAND;
                         }
                 }
@@ -1487,9 +1631,9 @@ static void scsi_cd_atapi_identify(uint16_t *buffer, void *p)
         memset(buffer, 0, 512);
         
         buffer[0] = 0x8000 | (5<<8) | 0x80 | (2<<5); /* ATAPI device, CD-ROM drive, removable media, accelerated DRQ */
-	ide_padstr((char *)(buffer + 10), "", 20); /* Serial Number */
-	ide_padstr((char *)(buffer + 23), "v1.0", 8); /* Firmware */
-	ide_padstr((char *)(buffer + 27), "PCemCD", 40); /* Model */
+	ide_padstr((char *)(buffer + 10), cd_models[cd_data->cur_model].serial2_20, 20); /* Serial Number */
+	ide_padstr((char *)(buffer + 23), cd_models[cd_data->cur_model].firmware2_8, 8); /* Firmware */
+	ide_padstr((char *)(buffer + 27), cd_models[cd_data->cur_model].model2_40, 40); /* Model */
 	buffer[49] = 0x300; /*DMA and LBA supported*/
 	buffer[51] = 120;
 	buffer[52] = 120;
@@ -1553,6 +1697,7 @@ scsi_device_t scsi_cd =
         scsi_cd_init,
         scsi_cd_atapi_init,
         scsi_cd_close,
+        scsi_cd_reset,
         
         scsi_cd_start_command,
         scsi_cd_command,

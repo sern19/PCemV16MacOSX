@@ -63,8 +63,8 @@ typedef struct svga_t
         uint32_t ma_latch;
         int bpp;
         
-        int dispontime, dispofftime;
-        int vidtime;
+        uint64_t dispontime, dispofftime;
+        pc_timer_t timer;
         
         uint8_t scrblank;
         
@@ -77,6 +77,7 @@ typedef struct svga_t
         int linepos, vslines, linecountff, oddeven;
         int con, cursoron, blink;
         int scrollcache;
+        int char_width;
         
         int firstline, lastline;
         int firstline_draw, lastline_draw;
@@ -123,10 +124,25 @@ typedef struct svga_t
         
         void (*vblank_start)(struct svga_t *svga);
         
+        /*Called when VC=R18 and friends. If this returns zero then MA resetting
+          is skipped. Matrox Mystique in Power mode reuses this counter for
+          vertical line interrupt*/
+        int (*line_compare)(struct svga_t *svga);
+        
+        /*Called at the start of vertical sync*/
+        void (*vsync_callback)(struct svga_t *svga);
+        
         /*If set then another device is driving the monitor output and the SVGA
           card should not attempt to display anything */
         int override;
         void *p;
+
+        uint8_t ksc5601_sbyte_mask;
+        
+        int vertical_linedbl;
+        
+        /*Used to implement CRTC[0x17] bit 2 hsync divisor*/
+        int hsync_divisor;
 } svga_t;
 
 extern int svga_init(svga_t *svga, void *p, int memsize, 

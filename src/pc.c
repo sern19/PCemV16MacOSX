@@ -7,6 +7,7 @@
 #include "ali1429.h"
 #include "cdrom-ioctl.h"
 #include "cdrom-image.h"
+#include "cpu.h"
 #include "disc.h"
 #include "disc_img.h"
 #include "mem.h"
@@ -66,7 +67,6 @@ int start_in_fullscreen = 0;
 
 static int override_drive_a = 0, override_drive_b = 0;
 
-int CPUID;
 int vid_resize, vid_api;
 
 int cycles_lost = 0;
@@ -81,7 +81,6 @@ void fullspeed();
 
 int framecount,fps;
 
-int output;
 int atfullspeed;
 
 void saveconfig(char *fn);
@@ -106,7 +105,7 @@ void pclog(const char *format, ...)
         vsprintf(buf, format, ap);
         va_end(ap);
         fputs(buf,pclogf);
-        //fflush(pclogf);
+//        fflush(pclogf);
 #endif
 }
 
@@ -275,7 +274,7 @@ void initpc(int argc, char *argv[])
                         if ((c+1) == argc)
                                 break;
 
-                        strncpy(discfns[0], argv[c+1], 260);
+                        strncpy(discfns[0], argv[c+1], 256);
                         c++;
                         override_drive_a = 1;
                 }
@@ -284,7 +283,7 @@ void initpc(int argc, char *argv[])
                         if ((c+1) == argc)
                                 break;
 
-                        strncpy(discfns[1], argv[c+1], 260);
+                        strncpy(discfns[1], argv[c+1], 256);
                         c++;
                         override_drive_b = 1;
                 }
@@ -360,8 +359,7 @@ void initpc(int argc, char *argv[])
         ali1429_reset();
 //        CPUID=(is486 && (cpuspeed==7 || cpuspeed>=9));
 //        pclog("Init - CPUID %i %i\n",CPUID,cpuspeed);
-        shadowbios=0;
-        
+
 #if __unix
 	if (cdrom_drive == -1)
 	        cdrom_null_reset();	
@@ -387,17 +385,16 @@ void resetpc()
 //        cpuspeed2=(AT)?2:1;
 //        atfullspeed=0;
 ///*        if (romset==ROM_AMI386 || romset==ROM_AMI486) */fullspeed();
-        shadowbios=0;
 }
 
 void resetpc_cad()
 {
-	keyboard_send(29);	/* Ctrl key pressed */
-	keyboard_send(56);	/* Alt key pressed */
-	keyboard_send(83);	/* Delete key pressed */
-	keyboard_send(157);	/* Ctrl key released */
-	keyboard_send(184);	/* Alt key released */
-	keyboard_send(211);	/* Delete key released */
+	keyboard_send_scancode(29, 0);	/* Ctrl key pressed */
+	keyboard_send_scancode(56, 0);	/* Alt key pressed */
+	keyboard_send_scancode(83, 0);	/* Delete key pressed */
+	keyboard_send_scancode(29, 1);	/* Ctrl key released */
+	keyboard_send_scancode(56, 1);	/* Alt key released */
+	keyboard_send_scancode(83, 1);	/* Delete key released */
 }
 
 void resetpchard()
@@ -410,12 +407,14 @@ void resetpchard()
         sound_reset();
         io_init();
         cpu_set();
-        mem_resize();
+        mem_alloc();
         fdc_init();
 	disc_reset();
         disc_load(0, discfns[0]);
         disc_load(1, discfns[1]);
 
+        if (!AT && models[model].max_ram > 640 && models[model].max_ram <= 768 && !video_is_ega_vga())
+                mem_set_704kb();
         model_init();
         mouse_emu_init();
         video_init();
@@ -447,7 +446,6 @@ void resetpchard()
 //        atfullspeed = 0;
 //        setpitclock(models[model].cpu[cpu_manufacturer].cpus[cpu].rspeed);
 
-        shadowbios = 0;
         ali1429_reset();
         
         keyboard_at_reset();
@@ -563,8 +561,6 @@ void runpc()
                 cpu_recomp_evicted_latched = cpu_recomp_evicted;
                 cpu_recomp_reuse_latched = cpu_recomp_reuse;
                 cpu_recomp_removed_latched = cpu_recomp_removed;
-                cpu_reps_latched = cpu_reps;
-                cpu_notreps_latched = cpu_notreps;
 
                 cpu_recomp_blocks = 0;
                 cpu_state.cpu_recomp_ins = 0;
@@ -574,8 +570,6 @@ void runpc()
                 cpu_recomp_evicted = 0;
                 cpu_recomp_reuse = 0;
                 cpu_recomp_removed = 0;
-                cpu_reps = 0;
-                cpu_notreps = 0;
 
                 updatestatus=1;
                 readlnum=writelnum=0;
@@ -588,7 +582,7 @@ void runpc()
         if (win_title_update)
         {
                 win_title_update=0;
-                sprintf(s, "PCem v14 - %i%% - %s - %s - %s", fps, model_getname(), models[model].cpu[cpu_manufacturer].cpus[cpu].name, (!mousecapture) ? "Click to capture mouse" : ((mouse_get_type(mouse_type) & MOUSE_TYPE_3BUTTON) ? "Press CTRL-END to release mouse" : "Press CTRL-END or middle button to release mouse"));
+                sprintf(s, "PCem v16 - %i%% - %s - %s - %s", fps, model_getname(), models[model].cpu[cpu_manufacturer].cpus[cpu].name, (!mousecapture) ? "Click to capture mouse" : ((mouse_get_type(mouse_type) & MOUSE_TYPE_3BUTTON) ? "Press CTRL-END to release mouse" : "Press CTRL-END or middle button to release mouse"));
                 set_window_title(s);
         }
         done++;
@@ -608,7 +602,6 @@ void fullspeed()
 //                else       setpitclock(clocks[AT?1:0][cpuspeed2][0]);
         }
         atfullspeed=1;
-        nvr_recalc();
 }
 
 void speedchanged()
@@ -617,11 +610,11 @@ void speedchanged()
                 setpitclock(models[model].cpu[cpu_manufacturer].cpus[cpu].rspeed);
         else
                 setpitclock(14318184.0);
-        nvr_recalc();
 }
 
 void closepc()
 {
+        codegen_close();
         atapi->exit();
 //        ioctl_close();
         dumppic();
@@ -717,6 +710,8 @@ void loadconfig(char *fn)
         romset = model_getromset();
         cpu_manufacturer = config_get_int(CFG_MACHINE, NULL, "cpu_manufacturer", 0);
         cpu = config_get_int(CFG_MACHINE, NULL, "cpu", 0);
+        p = (char *)config_get_string(CFG_MACHINE, NULL, "fpu", "none");
+        fpu_type = fpu_get_type(model, cpu_manufacturer, cpu, p);
         cpu_use_dynarec = config_get_int(CFG_MACHINE, NULL, "cpu_use_dynarec", 0);
         cpu_waitstates = config_get_int(CFG_MACHINE, NULL, "cpu_waitstates", 0);
                 
@@ -813,6 +808,7 @@ void loadconfig(char *fn)
         bpb_disable = config_get_int(CFG_MACHINE, NULL, "bpb_disable", 0);
 
         cd_speed = config_get_int(CFG_MACHINE, NULL, "cd_speed", 24);
+        cd_model = cd_model_from_config((char *)config_get_string(CFG_MACHINE, NULL, "cd_model", cd_get_config_model(0)));
         
         joystick_type = config_get_int(CFG_MACHINE, NULL, "joystick_type", 0);
         mouse_type = config_get_int(CFG_MACHINE, NULL, "mouse_type", 0);
@@ -907,6 +903,7 @@ void saveconfig(char *fn)
         config_set_string(CFG_MACHINE, NULL, "model", model_get_internal_name());
         config_set_int(CFG_MACHINE, NULL, "cpu_manufacturer", cpu_manufacturer);
         config_set_int(CFG_MACHINE, NULL, "cpu", cpu);
+        config_set_string(CFG_MACHINE, NULL, "fpu", (char *)fpu_get_internal_name(model, cpu_manufacturer, cpu, fpu_type));
         config_set_int(CFG_MACHINE, NULL, "cpu_use_dynarec", cpu_use_dynarec);
         config_set_int(CFG_MACHINE, NULL, "cpu_waitstates", cpu_waitstates);
         
@@ -914,7 +911,6 @@ void saveconfig(char *fn)
         config_set_int(CFG_MACHINE, NULL, "video_speed", video_speed);
         config_set_string(CFG_MACHINE, NULL, "sndcard", sound_card_get_internal_name(sound_card_current));
         config_set_int(CFG_MACHINE, NULL, "cpu_speed", cpuspeed);
-        config_set_int(CFG_MACHINE, NULL, "has_fpu", hasfpu);
         config_set_string(CFG_MACHINE, NULL, "disc_a", discfns[0]);
         config_set_string(CFG_MACHINE, NULL, "disc_b", discfns[1]);
         config_set_string(CFG_MACHINE, NULL, "hdd_controller", hdd_controller_name);
@@ -960,6 +956,7 @@ void saveconfig(char *fn)
         config_set_int(CFG_MACHINE, NULL, "bpb_disable", bpb_disable);
 
         config_set_int(CFG_MACHINE, NULL, "cd_speed", cd_speed);
+        config_set_string(CFG_MACHINE, NULL, "cd_model", cd_model_to_config(cd_model));
         
         config_set_int(CFG_MACHINE, NULL, "joystick_type", joystick_type);
         config_set_int(CFG_MACHINE, NULL, "mouse_type", mouse_type);

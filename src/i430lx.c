@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "ibm.h"
+#include "ide.h"
 #include "io.h"
 #include "keyboard_at.h"
 #include "mem.h"
@@ -65,7 +66,6 @@ void i430lx_write(int func, int addr, uint8_t val, void *priv)
                 if ((card_i430lx[0x59] ^ val) & 0xf0)
                 {
                         i430lx_map(0xf0000, 0x10000, val >> 4);
-                        shadowbios = (val & 0x10);
                 }
                 pclog("i430lx_write : PAM0 write %02X\n", val);
                 break;
@@ -135,10 +135,11 @@ void i430lx_trc_write(uint16_t port, uint8_t val, void *p)
                 {
                         i430lx_write(0, 0x59, 0xf, NULL); /*Should reset all PCI devices, but just set PAM0 to point to ROM for now*/
                         keyboard_at_reset(); /*Reset keyboard controller to reset system flag*/
+                        ide_reset_devices();
                 }
                 resetx86();
         }
-                
+
         trc = val;
 }
 

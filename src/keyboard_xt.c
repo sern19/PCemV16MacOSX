@@ -1,5 +1,6 @@
 #include "ibm.h"
 #include "device.h"
+#include "cassette.h"
 #include "fdd.h"
 #include "io.h"
 #include "mem.h"
@@ -36,6 +37,8 @@ struct
         
         int tandy;
         int pb2_turbo;
+
+	pc_timer_t send_delay_timer;
 } keyboard_xt;
 
 static uint8_t key_queue[16];
@@ -43,7 +46,7 @@ static int key_queue_start = 0, key_queue_end = 0;
 
 void keyboard_xt_poll()
 {
-        keybsenddelay += (1000 * TIMER_USEC);
+        timer_advance_u64(&keyboard_xt.send_delay_timer, (1000 * TIMER_USEC));
         if (!(keyboard_xt.pb & 0x40) && romset != ROM_TANDY)
                 return;
         if (keyboard_xt.wantirq)
@@ -124,9 +127,10 @@ void keyboard_xt_write(uint16_t port, uint8_t val, void *priv)
                 ppi.pb = val;
 
                 timer_process();
-                timer_update_outstanding();
-                
-                if (keyboard_xt.pb2_turbo)
+
+                if (romset == ROM_IBMPC)
+                	cassette_set_motor((val & 8) ? 0 : 1);
+                else if (keyboard_xt.pb2_turbo)
                         cpu_set_turbo((val & 4) ? 0 : 1);
         
                 speaker_update();
@@ -153,7 +157,7 @@ uint8_t keyboard_xt_read(uint16_t port, void *priv)
         switch (port)
         {
                 case 0x60:
-                if ((romset == ROM_IBMPC) && (keyboard_xt.pb & 0x80))
+                if ((romset == ROM_IBMPC || romset == ROM_LEDGE_MODELM) && (keyboard_xt.pb & 0x80))
                 {
                         if (video_is_ega_vga())
                                 temp = 0x4D;
@@ -161,6 +165,8 @@ uint8_t keyboard_xt_read(uint16_t port, void *priv)
                                 temp = 0x7D;
                         else            
                                 temp = 0x6D;
+                        if (hasfpu)
+                                temp |= 0x02;
                 }
                 else if ((romset == ROM_ATARIPC3) && (keyboard_xt.pb & 0x80))
                 {
@@ -183,6 +189,13 @@ uint8_t keyboard_xt_read(uint16_t port, void *priv)
                                 temp = ((mem_size-64) / 32) & 0xf;
                         else
                                 temp = ((mem_size-64) / 32) >> 4;
+
+        		temp |= (cassette_input()) ? 0x10 : 0;
+                }
+                else if (romset == ROM_LEDGE_MODELM)
+                {
+                        /*High bit of memory size is read from port 0xa0*/
+                        temp = ((mem_size-64) / 32) & 0xf;
                 }
                 else if (romset == ROM_ATARIPC3)
                 {
@@ -203,7 +216,7 @@ uint8_t keyboard_xt_read(uint16_t port, void *priv)
                                         temp = 6;
                         }
                         else
-                                temp = 0xD;
+                                temp = hasfpu ? 0xf : 0xd;
                 }
                 temp |= (ppispeakon ? 0x20 : 0);
                 if (keyboard_xt.tandy)
@@ -219,6 +232,16 @@ uint8_t keyboard_xt_read(uint16_t port, void *priv)
         return temp;
 }
 
+static uint8_t ledge_modelm_read(uint16_t port, void *p)
+{
+        uint8_t temp = 0;
+        
+        if (((mem_size-64) / 32) >> 4)
+                temp |= 0x40;
+
+        return temp;
+}
+
 void keyboard_xt_reset()
 {
         keyboard_xt.wantirq = 0;
@@ -230,13 +253,15 @@ void keyboard_xt_init()
 {
         //return;
         io_sethandler(0x0060, 0x0004, keyboard_xt_read, NULL, NULL, keyboard_xt_write, NULL, NULL,  NULL);
+        if (romset == ROM_LEDGE_MODELM)
+                io_sethandler(0x00a0, 0x0001, ledge_modelm_read, NULL, NULL, NULL, NULL, NULL, NULL);
         keyboard_xt_reset();
         keyboard_send = keyboard_xt_adddata;
         keyboard_poll = keyboard_xt_poll;
         keyboard_xt.tandy = 0;
         keyboard_xt.pb2_turbo = (romset == ROM_GENXT || romset == ROM_DTKXT || romset == ROM_AMIXT || romset == ROM_PXXT) ? 1 : 0;
 
-        timer_add(keyboard_xt_poll, &keybsenddelay, TIMER_ALWAYS_ENABLED,  NULL);
+        timer_add(&keyboard_xt.send_delay_timer, keyboard_xt_poll, NULL, 1);
 }
 
 void keyboard_tandy_init()
@@ -248,5 +273,5 @@ void keyboard_tandy_init()
         keyboard_poll = keyboard_xt_poll;
         keyboard_xt.tandy = (romset != ROM_TANDY) ? 1 : 0;
         
-        timer_add(keyboard_xt_poll, &keybsenddelay, TIMER_ALWAYS_ENABLED,  NULL);
+        timer_add(&keyboard_xt.send_delay_timer, keyboard_xt_poll, NULL, 1);
 }

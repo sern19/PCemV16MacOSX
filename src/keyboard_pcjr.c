@@ -1,5 +1,7 @@
 #include "ibm.h"
 #include "device.h"
+#include "cassette.h"
+#include "fdd.h"
 #include "io.h"
 #include "mem.h"
 #include "nmi.h"
@@ -32,6 +34,8 @@ struct
 
         uint8_t pa;
         uint8_t pb;
+
+	pc_timer_t send_delay_timer;
 } keyboard_pcjr;
 
 static uint8_t key_queue[16];
@@ -39,8 +43,7 @@ static int key_queue_start = 0, key_queue_end = 0;
 
 void keyboard_pcjr_poll()
 {
-        keybsenddelay += (220 * TIMER_USEC);
-
+        timer_advance_u64(&keyboard_pcjr.send_delay_timer, (220 * TIMER_USEC));
 
         if (key_queue_start != key_queue_end && !keyboard_pcjr.serial_pos && !keyboard_pcjr.latched)
         {
@@ -127,7 +130,8 @@ void keyboard_pcjr_write(uint16_t port, uint8_t val, void *priv)
                 keyboard_pcjr.pb = val;
 
                 timer_process();
-                timer_update_outstanding();
+
+                cassette_set_motor((val & 8) ? 0 : 1);
 
                 speaker_update();
                 speaker_gated = val & 1;
@@ -171,7 +175,12 @@ uint8_t keyboard_pcjr_read(uint16_t port, void *priv)
                 case 0x62:
                 temp = (keyboard_pcjr.latched ? 1 : 0);
                 temp |= 0x02; /*Modem card not installed*/
-                temp |= (ppispeakon ? 0x10 : 0);
+                if (fdd_get_type(0) == 0)
+                        temp |= 0x04; /*Disc card not installed*/
+                if (!(keyboard_pcjr.pb & 8))
+                        temp |= (cassette_input()) ? 0x10 : 0;
+                else
+                        temp |= (ppispeakon ? 0x10 : 0);
                 temp |= (ppispeakon ? 0x20 : 0);
                 temp |= (keyboard_pcjr.data ? 0x40: 0);
 //                temp |= 0x04;
@@ -205,5 +214,5 @@ void keyboard_pcjr_init()
         keyboard_send = keyboard_pcjr_adddata;
         keyboard_poll = keyboard_pcjr_poll;
 
-        timer_add(keyboard_pcjr_poll, &keybsenddelay, TIMER_ALWAYS_ENABLED,  NULL);
+        timer_add(&keyboard_pcjr.send_delay_timer, keyboard_pcjr_poll, NULL, 1);
 }

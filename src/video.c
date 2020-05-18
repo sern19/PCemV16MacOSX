@@ -23,9 +23,12 @@
 #include "vid_et4000w32.h"
 #include "vid_genius.h"
 #include "vid_hercules.h"
+#include "vid_ht216.h"
+#include "vid_im1024.h"
 #include "vid_incolor.h"
 #include "vid_colorplus.h"
 #include "vid_mda.h"
+#include "vid_mga.h"
 #include "vid_olivetti_m24.h"
 #include "vid_oti037.h"
 #include "vid_oti067.h"
@@ -34,9 +37,11 @@
 #include "vid_pc1640.h"
 #include "vid_pc200.h"
 #include "vid_pcjr.h"
+#include "vid_pgc.h"
 #include "vid_ps1_svga.h"
 #include "vid_s3.h"
 #include "vid_s3_virge.h"
+#include "vid_sigma.h"
 #include "vid_tandy.h"
 #include "vid_tandysl.h"
 #include "vid_tgui9440.h"
@@ -77,12 +82,15 @@ typedef struct
 
 static VIDEO_CARD video_cards[] =
 {
+        {"Acumos AVGA2 / Cirrus Logic CL-GD5402",  "avga2",          &avga2_device,                     GFX_AVGA2,           VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
         {"ATI Graphics Pro Turbo (Mach64 GX)",     "mach64gx",       &mach64gx_device,                  GFX_MACH64GX,        VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 2,  2,  1,  20, 20, 21}},
         {"ATI Video Xpression (Mach64 VT2)",       "mach64vt2",      &mach64vt2_device,                 GFX_MACH64VT2,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 2,  2,  1,  20, 20, 21}},
+        {"ATI EGA Wonder 800+ (ATI-18800)",        "egawonder800",   &ati_ega_wonder_800_device,        GFX_EGAWONDER800,    VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"ATI Korean VGA (ATI-28800)",             "ati28800k",      &ati28800k_device,                 GFX_ATIKOREANVGA,    VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
         {"ATI VGA Charger (ATI-28800)",            "ati28800",       &ati28800_device,                  GFX_VGACHARGER,      VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
         {"ATI VGA Edge-16 (ATI-18800)",            "ati18800",       &ati18800_device,                  GFX_VGAEDGE16,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"CGA",                                    "cga",            &cga_device,                       GFX_CGA,             VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
+        {"Cirrus Logic CL-GD5428",                 "cl_gd5428",      &gd5428_device,                    GFX_CL_GD5428,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  8,  10, 10, 20}},
         {"Cirrus Logic CL-GD5429",                 "cl_gd5429",      &gd5429_device,                    GFX_CL_GD5429,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  8,  10, 10, 20}},
         {"Cirrus Logic CL-GD5430",                 "cl_gd5430",      &gd5430_device,                    GFX_CL_GD5430,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  8,  10, 10, 20}},
         {"Cirrus Logic CL-GD5434",                 "cl_gd5434",      &gd5434_device,                    GFX_CL_GD5434,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  8,  10, 10, 20}},
@@ -92,21 +100,29 @@ static VIDEO_CARD video_cards[] =
         {"EGA",                                    "ega",            &ega_device,                       GFX_EGA,             VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"Hercules",                               "hercules",       &hercules_device,                  GFX_HERCULES,        VIDEO_FLAG_TYPE_MDA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"Hercules InColor",                       "incolor",        &incolor_device,                   GFX_INCOLOR,         VIDEO_FLAG_TYPE_MDA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
+        {"IBM 1MB SVGA Adapter/A (CL GD5428)",     "ibm1mbsvga",     &ibm_gd5428_device,                GFX_IBM_GD5428,      VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  8,  10, 10, 20}},
+        {"Image Manager 1024",                     "im1024",         &im1024_device,                    GFX_IM1024,          VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
+        {"Matrox Mystique",                        "mystique",       &mystique_device,                  GFX_MYSTIQUE,        VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  4,  10, 10, 10}},
         {"MDA",                                    "mda",            &mda_device,                       GFX_MDA,             VIDEO_FLAG_TYPE_MDA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
-        {"MDSI Genius",                            "genius",         &genius_device,                    GFX_GENIUS,          VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
+        {"MDSI Genius",                            "genius",         &genius_device,                    GFX_GENIUS,          VIDEO_FLAG_TYPE_MDA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"Number Nine 9FX (S3 Trio64)",            "n9_9fx",         &s3_9fx_device,                    GFX_N9_9FX,          VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 3,  2,  4,  25, 25, 40}},
         {"OAK OTI-037",                            "oti037",         &oti037_device,                    GFX_OTI037,          VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 6,  8, 16,   6,  8, 16}},
         {"OAK OTI-067",                            "oti067",         &oti067_device,                    GFX_OTI067,          VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 6,  8, 16,   6,  8, 16}},
         {"Olivetti GO481 (Paradise PVGA1A)",       "olivetti_go481", &paradise_pvga1a_oli_go481_device, GFX_OLIVETTI_GO481,  VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 6,  8, 16,   6,  8, 16}},
         {"Paradise Bahamas 64 (S3 Vision864)",     "bahamas64",      &s3_bahamas64_device,              GFX_BAHAMAS64,       VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  4,  5,  20, 20, 35}},
+/* Not offered as the emulation is very incomplete
+        {"Professional Graphics Controller",       "pgc",            &pgc_device,                       GFX_PGC,             VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
+*/
         {"Phoenix S3 Trio32",                      "px_trio32",      &s3_phoenix_trio32_device,         GFX_PHOENIX_TRIO32,  VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 3,  2,  4,  25, 25, 40}},
         {"Phoenix S3 Trio64",                      "px_trio64",      &s3_phoenix_trio64_device,         GFX_PHOENIX_TRIO64,  VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 3,  2,  4,  25, 25, 40}},
         {"Plantronics ColorPlus",                  "plantronics",    &colorplus_device,                 GFX_COLORPLUS,       VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"S3 ViRGE/DX",                            "virge375",       &s3_virge_375_device,              GFX_VIRGEDX,         VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 2,  2,  3,  28, 28, 45}},
+        {"Sigma Color 400",                        "sigma400",       &sigma_device,                     GFX_SIGMA400,        VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"Trident TVGA8900D",                      "tvga8900d",      &tvga8900d_device,                 GFX_TVGA,            VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   8,  8, 12}},
-        {"Tseng ET4000AX",                         "et4000ax",       &et4000_device,                    GFX_ET4000,          VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
         {"Trident TGUI9400CXi",                    "tgui9400cxi",    &tgui9400cxi_device,               GFX_TGUI9400CXI,     VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  8, 16,   4,  8, 16}},
         {"Trident TGUI9440",                       "tgui9440",       &tgui9440_device,                  GFX_TGUI9440,        VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_BUS, 4,  8, 16,   4,  8, 16}},
+        {"Trigem Korean VGA (Tseng ET4000AX)",      "tgkorvga",       &et4000k_device,                   GFX_TGKOREANVGA,     VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
+        {"Tseng ET4000AX",                         "et4000ax",       &et4000_device,                    GFX_ET4000,          VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 3,  3,  6,   5,  5, 10}},
         {"VGA",                                    "vga",            &vga_device,                       GFX_VGA,             VIDEO_FLAG_TYPE_SPECIAL, {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"Wyse 700",                               "wy700",          &wy700_device,                     GFX_WY700,           VIDEO_FLAG_TYPE_CGA,     {VIDEO_ISA, 8, 16, 32,   8, 16, 32}},
         {"",                                       "",               NULL,                              0}
@@ -119,12 +135,15 @@ static video_timings_t timing_pc200    = {VIDEO_ISA, 8,16,32, 8,16,32};
 static video_timings_t timing_m24      = {VIDEO_ISA, 8,16,32, 8,16,32};
 static video_timings_t timing_pvga1a   = {VIDEO_ISA, 6, 8,16, 6, 8,16};
 static video_timings_t timing_wd90c11  = {VIDEO_ISA, 3, 3, 6, 5, 5,10};
+static video_timings_t timing_avga2    = {VIDEO_ISA, 3, 3, 6, 5, 5,10};
 static video_timings_t timing_oti067   = {VIDEO_ISA, 6, 8,16, 6, 8,16};
 static video_timings_t timing_vga      = {VIDEO_ISA, 8,16,32, 8,16,32};
 static video_timings_t timing_ps1_svga = {VIDEO_ISA, 6, 8,16, 6, 8,16};
 static video_timings_t timing_t3100e   = {VIDEO_ISA, 8,16,32, 8,16,32};
 static video_timings_t timing_t1000    = {VIDEO_ISA, 8,16,32, 8,16,32};
+static video_timings_t timing_spc4620p = {VIDEO_ISA, 2, 2, 4, 4, 4, 8};
 static video_timings_t timing_pc425x   = {VIDEO_BUS, 5, 5, 9, 20,20,30};
+static video_timings_t timing_pb410a   = {VIDEO_BUS, 5, 5, 9, 20,20,30};
 static video_timings_t timing_pb570    = {VIDEO_BUS, 4, 4, 8, 10,10,20};
 static video_timings_t timing_pb520r   = {VIDEO_BUS, 4, 4, 8, 10,10,20};
 
@@ -146,7 +165,7 @@ char *video_card_getname(int card)
         return video_cards[card].name;
 }
 
-device_t *video_card_getdevice(int card)
+device_t *video_card_getdevice(int card, int romset)
 {
         switch (romset)
         {
@@ -164,45 +183,64 @@ device_t *video_card_getdevice(int card)
                 return &pc1512_device;
                 
                 case ROM_PC1640:
-                if (gfxcard == GFX_BUILTIN)
+                if (card == GFX_BUILTIN)
                         return &pc1640_device;
                 break;
                 
                 case ROM_PC200:
-                if (gfxcard == GFX_BUILTIN)
+                if (card == GFX_BUILTIN)
                         return &pc200_device;
+                break;
+
+		case ROM_PPC512:
+                if (card == GFX_BUILTIN)
+                        return &ppc512_device;
                 break;
                 
                 case ROM_OLIM24:
                 return &m24_device;
 
                 case ROM_PC2086:
-                if (gfxcard == GFX_BUILTIN)
+                if (card == GFX_BUILTIN)
                         return &paradise_pvga1a_pc2086_device;
                 break;
 
                 case ROM_PC3086:
-                if (gfxcard == GFX_BUILTIN)
+                if (card == GFX_BUILTIN)
                         return &paradise_pvga1a_pc3086_device;
                 break;
 
                 case ROM_MEGAPC:
                 return &paradise_wd90c11_megapc_device;
-                        
+
+                case ROM_SPC4620P:
+                if (card == GFX_BUILTIN)
+                        return &ati28800k_spc4620p_device;
+
                 case ROM_ACER386:
                 return &oti067_acer386_device;
+                        
+                case ROM_AMA932J:
+                return &oti067_ama932j_device;
                 
                 case ROM_IBMPS1_2011:
                 case ROM_IBMPS2_M30_286:
+                return &ps1vga_device;
+
                 case ROM_IBMPS2_M50:
                 case ROM_IBMPS2_M55SX:
                 case ROM_IBMPS2_M70_TYPE3:
                 case ROM_IBMPS2_M70_TYPE4:
                 case ROM_IBMPS2_M80:
-                return &ps1vga_device;
-
+                if (card == GFX_BUILTIN)
+                        return &ps1vga_device;
+                break;
+                
                 case ROM_IBMPS1_2121:
                 return &ps1_m2121_svga_device;
+
+                case ROM_IBMPS1_2133_451:
+                return &gd5426_ps1_device;
 
 		case ROM_T3100E:
                 return &t3100e_device;
@@ -214,20 +252,31 @@ device_t *video_card_getdevice(int card)
                 case ROM_ELX_PC425X:
                 return &tgui9400cxi_elx_device;
 
+                case ROM_PB410A:
+                return &ht216_32_pb410a_device;
+
                 case ROM_PB570:
                 return &gd5430_pb570_device;
                 
                 case ROM_PB520R:
                 return &gd5434_pb520r_device;
+                
+                case ROM_CBM_SL386SX25:
+                return &avga2_cbm_sl386sx_device;
         }
         return video_cards[card].device;
 }
 
-int video_card_has_config(int card)
+int video_card_has_config(int card, int romset)
 {
-        if (card == GFX_BUILTIN)
+	/* Allow builtin cards to have configuration */
+	device_t *device = video_card_getdevice(card, romset);
+
+	if (!device)
+	{
                 return 0;
-        return video_cards[card].device->config ? 1 : 0;
+	}	
+        return device->config ? 1 : 0;
 }
 
 int video_card_getid(char *s)
@@ -301,8 +350,16 @@ int video_is_mda()
 {
         switch (romset)
         {
-                case ROM_PC1640:
                 case ROM_PC200:
+		case ROM_PPC512:
+		if (gfxcard == GFX_BUILTIN)
+		{
+/* The chipset here can emulate either CGA or MDA. Find out which */
+			return (pc200_is_mda);
+		}
+		break;
+
+                case ROM_PC1640:
                 case ROM_PC2086:
                 case ROM_PC3086:
                 case ROM_MEGAPC:
@@ -323,11 +380,14 @@ int video_is_mda()
                 case ROM_IBMPS2_M70_TYPE4:
                 case ROM_IBMPS2_M80:
                 case ROM_IBMPS1_2121:
-        	case ROM_T3100E:
+                case ROM_IBMPS1_2133_451:
+                case ROM_T3100E:
         	case ROM_T1000:
                 case ROM_ELX_PC425X:
+                case ROM_PB410A:
                 case ROM_PB570:
                 case ROM_PB520R:
+                case ROM_CBM_SL386SX25:
                 return 0;
         }
         return (video_cards[video_old_to_new(gfxcard)].flags & VIDEO_FLAG_TYPE_MASK) == VIDEO_FLAG_TYPE_MDA;
@@ -337,8 +397,14 @@ int video_is_cga()
         switch (romset)
         {
                 case ROM_PC200:
-                if (gfxcard != GFX_BUILTIN)
-                        break;
+		case ROM_PPC512:
+		if (gfxcard == GFX_BUILTIN)
+		{
+/* The chipset here can emulate either CGA or MDA. Find out which */
+			return (!pc200_is_mda);
+		}
+                break;
+
                 case ROM_IBMPCJR:
                 case ROM_TANDY:
                 case ROM_TANDY1000HX:
@@ -364,9 +430,12 @@ int video_is_cga()
                 case ROM_IBMPS2_M70_TYPE4:
                 case ROM_IBMPS2_M80:
                 case ROM_IBMPS1_2121:
+                case ROM_IBMPS1_2133_451:
                 case ROM_ELX_PC425X:
+                case ROM_PB410A:
                 case ROM_PB570:
                 case ROM_PB520R:
+                case ROM_CBM_SL386SX25:
                 return 0;
         }
         return (video_cards[video_old_to_new(gfxcard)].flags & VIDEO_FLAG_TYPE_MASK) == VIDEO_FLAG_TYPE_CGA;
@@ -381,6 +450,7 @@ int video_is_ega_vga()
                 case ROM_TANDY1000SL2:
                 case ROM_PC1512:
                 case ROM_PC200:
+		case ROM_PPC512:
                 case ROM_OLIM24:
         	case ROM_T3100E:
         	case ROM_T1000:
@@ -391,6 +461,7 @@ int video_is_ega_vga()
                 case ROM_PC3086:
                 case ROM_MEGAPC:
                 case ROM_ACER386:
+                case ROM_AMA932J:
                 case ROM_IBMPS1_2011:
                 case ROM_IBMPS2_M30_286:
                 case ROM_IBMPS2_M50:
@@ -399,9 +470,12 @@ int video_is_ega_vga()
                 case ROM_IBMPS2_M70_TYPE4:
                 case ROM_IBMPS2_M80:
                 case ROM_IBMPS1_2121:
+                case ROM_IBMPS1_2133_451:
                 case ROM_ELX_PC425X:
+                case ROM_PB410A:
                 case ROM_PB570:
                 case ROM_PB520R:
+                case ROM_CBM_SL386SX25:
                 return 1;
         }
         return (video_cards[video_old_to_new(gfxcard)].flags & VIDEO_FLAG_TYPE_MASK) == VIDEO_FLAG_TYPE_SPECIAL;
@@ -499,6 +573,7 @@ void video_updatetiming()
                         break;
                 
                         case ROM_PC200:
+			case ROM_PPC512:
                         if (gfxcard == GFX_BUILTIN)
                                 timing = &timing_pc200;
                         break;
@@ -517,26 +592,44 @@ void video_updatetiming()
                         if (gfxcard == GFX_BUILTIN)
                                 timing = &timing_wd90c11;
                         break;
+
+                        case ROM_SPC4620P:
+                        if (gfxcard == GFX_BUILTIN)
+                                timing = &timing_spc4620p;
+                        break;
                         
                         case ROM_ACER386:
+                        if (gfxcard == GFX_BUILTIN)
+                                timing = &timing_oti067;
+                        break;
+                        
+                        case ROM_AMA932J:
                         if (gfxcard == GFX_BUILTIN)
                                 timing = &timing_oti067;
                         break;
                 
                         case ROM_IBMPS1_2011:
                         case ROM_IBMPS2_M30_286:
+                        timing = &timing_vga;
+                        break;
+
                         case ROM_IBMPS2_M50:
                         case ROM_IBMPS2_M55SX:
                         case ROM_IBMPS2_M70_TYPE3:
                         case ROM_IBMPS2_M70_TYPE4:
                         case ROM_IBMPS2_M80:
-                        timing = &timing_vga;
+                        if (gfxcard == GFX_BUILTIN)
+                                timing = &timing_vga;
                         break;
 
                         case ROM_IBMPS1_2121:
                         timing = &timing_ps1_svga;
                         break;
 
+                        case ROM_IBMPS1_2133_451:
+                        timing = &timing_pb570;
+                        break;
+                                
         		case ROM_T3100E:
                         timing = &timing_t3100e;
                         break;
@@ -549,12 +642,21 @@ void video_updatetiming()
                         timing = &timing_pc425x;
                         break;
                         
+                        case ROM_PB410A:
+                        if (gfxcard == GFX_BUILTIN)
+                                timing = &timing_pb410a;
+                        break;
+                        
                         case ROM_PB570:
                         timing = &timing_pb570;
                         break;
 
                         case ROM_PB520R:
                         timing = &timing_pb520r;
+                        break;
+
+                        case ROM_CBM_SL386SX25:
+                        timing = &timing_avga2;
                         break;
                 }
                 
@@ -651,6 +753,14 @@ void video_init()
                         device_add(&pc200_device);
                         return;
                 }
+		break;
+
+		case ROM_PPC512:
+                if (gfxcard == GFX_BUILTIN)
+                {
+                        device_add(&ppc512_device);
+                        return;
+                }
                 break;
                 
                 case ROM_OLIM24:
@@ -680,7 +790,15 @@ void video_init()
                         return;
                 }
                 break;
-                        
+
+                case ROM_SPC4620P:
+                if (gfxcard == GFX_BUILTIN)
+                {
+                        device_add(&ati28800k_spc4620p_device);
+                        return;
+                }
+                break;
+
                 case ROM_ACER386:
                 device_add(&oti067_acer386_device);
                 if (gfxcard != GFX_BUILTIN)
@@ -689,19 +807,32 @@ void video_init()
                         break;
                 }
                 return;
+                        
+                case ROM_AMA932J:
+                device_add(&oti067_ama932j_device);
+                return;
                 
                 case ROM_IBMPS1_2011:
                 case ROM_IBMPS2_M30_286:
+                device_add(&ps1vga_device);
+                return;
+
                 case ROM_IBMPS2_M50:
                 case ROM_IBMPS2_M55SX:
                 case ROM_IBMPS2_M70_TYPE3:
                 case ROM_IBMPS2_M70_TYPE4:
                 case ROM_IBMPS2_M80:
                 device_add(&ps1vga_device);
-                return;
+                if (gfxcard == GFX_BUILTIN)
+                        return;
+                break;
 
                 case ROM_IBMPS1_2121:
                 device_add(&ps1_m2121_svga_device);
+                return;
+
+                case ROM_IBMPS1_2133_451:
+                device_add(&gd5426_ps1_device);
                 return;
 
 		case ROM_T3100E:
@@ -715,6 +846,15 @@ void video_init()
                 
                 case ROM_ELX_PC425X:
                 device_add(&tgui9400cxi_elx_device);
+                return;
+
+                case ROM_PB410A:
+                device_add(&ht216_32_pb410a_device);
+                if (gfxcard != GFX_BUILTIN)
+                {
+                        svga_set_override(svga_get_pri(), 1);
+                        break;
+                }
                 return;
 
                 case ROM_PB570:
@@ -734,6 +874,10 @@ void video_init()
                         break;
                 }
                 return;
+
+                case ROM_CBM_SL386SX25:
+                device_add(&avga2_cbm_sl386sx_device);
+                return;
         }
         device_add(video_cards[video_old_to_new(gfxcard)].device);
 }
@@ -745,12 +889,13 @@ uint8_t fontdat[2048][8];
 uint8_t fontdatm[2048][16];
 uint8_t fontdatw[512][32];	/* Wyse700 font */
 uint8_t fontdat8x12[256][16];	/* MDSI Genius font */
+uint8_t fontdat12x18[256][36];	/* IM1024 font */
 uint8_t fontdatksc5601[16384][32]; /* Korean KSC-5601 font */
 uint8_t fontdatksc5601_user[192][32]; /* Korean KSC-5601 user defined font */
 
 int xsize=1,ysize=1;
 
-void loadfont(char *s, int format)
+void loadfont(char *s, fontformat_t format)
 {
         FILE *f=romfopen(s,"rb");
         int c,d;
@@ -762,7 +907,7 @@ void loadfont(char *s, int format)
 	}
 	switch (format)
         {
-		case 0:	/* MDA */
+		case FONT_MDA:	/* MDA */
                 for (c=0;c<256;c++)
                 {
                         for (d=0;d<8;d++)
@@ -786,33 +931,22 @@ void loadfont(char *s, int format)
                         }
                 }
 		break;
-		case 1:	/* PC200 */
-                for (c=0;c<256;c++)
-                {
-                        for (d=0;d<8;d++)
+		case FONT_PC200:	/* PC200 */
+		for (d=0;d<4;d++)	/* There are 4 fonts in the ROM */
+		{
+                	for (c=0;c<256;c++)	/* 8x14 MDA in 8x16 cell */
+                	{
+				fread(&fontdatm[256*d+c], 1, 16, f);
+			}
+			for (c=0;c<256; c++)	/* 8x8 CGA in 8x16 cell */
                         {
-                                fontdatm[c][d]=getc(f);
+				fread(fontdat[256*d+c], 1, 8, f);
+				fseek(f, 8, SEEK_CUR); 
                         }
-                }
-                for (c=0;c<256;c++)
-                {
-                       	for (d=0;d<8;d++)
-                        {
-                                fontdatm[c][d+8]=getc(f);
-                        }
-                }
-                fseek(f, 4096, SEEK_SET);
-                for (c=0;c<256;c++)
-                {
-                        for (d=0;d<8;d++)
-                        {
-                                fontdat[c][d]=getc(f);
-                        }
-                        for (d=0;d<8;d++) getc(f);                
                 }
 		break;
 		default:
-		case 2:	/* CGA */
+		case FONT_CGA:	/* CGA */
                 for (c=0;c<2048;c++)	/* Allow up to 2048 chars */
                 {
                        	for (d=0;d<8;d++)
@@ -821,7 +955,7 @@ void loadfont(char *s, int format)
                         }
                 }
 		break;
-		case 3: /* Wyse 700 */
+		case FONT_WY700: /* Wyse 700 */
                 for (c=0;c<512;c++)
                 {
                         for (d=0;d<32;d++)
@@ -830,7 +964,7 @@ void loadfont(char *s, int format)
                         }
                 }
 		break;
-		case 4: /* MDSI Genius */
+		case FONT_MDSI: /* MDSI Genius */
                 for (c=0;c<256;c++)
                 {
                         for (d=0;d<16;d++)
@@ -839,7 +973,7 @@ void loadfont(char *s, int format)
                         }
                 }
 		break;
-		case 5: /* Toshiba 3100e */
+		case FONT_T3100E: /* Toshiba 3100e */
 		for (d = 0; d < 2048; d += 512)	/* Four languages... */
 		{
 	                for (c = d; c < d+256; c++)
@@ -869,7 +1003,7 @@ void loadfont(char *s, int format)
                 	}
 		}
                 break;
-		case 6: /* Korean KSC-5601 */
+		case FONT_KSC5601: /* Korean KSC-5601 */
                 for (c=0;c<16384;c++)
                 {
                        	for (d=0;d<32;d++)
@@ -878,6 +1012,25 @@ void loadfont(char *s, int format)
                         }
                 }
                 break;
+		case FONT_SIGMA400: /* Sigma Color 400 */
+		/* The first 4k of the character ROM holds an 8x8 font */
+		for (c = 0; c < 256; c++)
+		{
+			fread(&fontdat[c][0], 1, 8, f);
+			fseek(f, 8, SEEK_CUR);
+		}
+		/* The second 4k holds an 8x16 font */
+		for (c = 0; c < 256; c++)
+		{
+			fread(&fontdatm[c][0], 1, 16, f);
+		}
+		break;
+		case FONT_IM1024: /* Image Manager 1024 native font */
+                for (c=0;c<256;c++)
+                {
+                        fread(&fontdat12x18[c][0], 1, 36, f);
+                }
+		break;
 
         }
         fclose(f);
