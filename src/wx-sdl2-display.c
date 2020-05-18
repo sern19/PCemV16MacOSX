@@ -131,8 +131,11 @@ int is_fullscreen()
 }
 
 void sdl_set_window_title(const char* title) {
+// Causes exception - 'NSInternalInconsistencyException', reason: 'NSWindow drag regions should only be invalidated on the Main Thread!'
+#ifndef __APPLE__
         if (window && !is_fullscreen())
                 SDL_SetWindowTitle(window, title);
+#endif
 }
 
 int get_border_size(int* top, int* left, int* bottom, int* right)
