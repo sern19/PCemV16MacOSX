@@ -64,7 +64,6 @@ void i430vx_write(int func, int addr, uint8_t val, void *priv)
                 if ((card_i430vx[0x59] ^ val) & 0xf0)
                 {
                         i430vx_map(0xf0000, 0x10000, val >> 4);
-                        shadowbios = (val & 0x10);
                 }
                 pclog("i430vx_write : PAM0 write %02X\n", val);
                 break;
@@ -142,4 +141,9 @@ void i430vx_init()
         card_i430vx[0x72] = 0x02;
         card_i430vx[0x74] = 0x0e;
         card_i430vx[0x78] = 0x23;
+}
+
+void i430vx_reset()
+{
+        i430vx_write(0, 0x59, 0xf, NULL); /*Should reset all PCI devices, but just set PAM0 to point to ROM for now*/
 }

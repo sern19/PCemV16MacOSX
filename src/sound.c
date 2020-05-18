@@ -15,6 +15,7 @@
 #include "sound_adlib.h"
 #include "sound_adlibgold.h"
 #include "sound_audiopci.h"
+#include "sound_azt2316a.h"
 #include "sound_pas16.h"
 #include "sound_sb.h"
 #include "sound_sb_dsp.h"
@@ -35,23 +36,25 @@ typedef struct
 
 static SOUND_CARD sound_cards[] =
 {
-        {"None",                      "none",      NULL},
-        {"Adlib",                     "adlib",     &adlib_device},
-        {"Adlib",                     "adlib_mca", &adlib_mca_device},
-        {"Sound Blaster 1.0",         "sb",        &sb_1_device},
-        {"Sound Blaster 1.5",         "sb1.5",     &sb_15_device},
-        {"Sound Blaster MCV",         "sbmcv",     &sb_mcv_device},
-        {"Sound Blaster 2.0",         "sb2.0",     &sb_2_device},
-        {"Sound Blaster Pro v1",      "sbprov1",   &sb_pro_v1_device},
-        {"Sound Blaster Pro v2",      "sbprov2",   &sb_pro_v2_device},
-        {"Sound Blaster Pro MCV",     "sbpromcv",  &sb_pro_mcv_device},
-        {"Sound Blaster 16",          "sb16",      &sb_16_device},
-        {"Sound Blaster AWE32",       "sbawe32",   &sb_awe32_device},
-        {"Adlib Gold",                "adlibgold", &adgold_device},
-        {"Windows Sound System",      "wss",       &wss_device},        
-        {"Pro Audio Spectrum 16",     "pas16",     &pas16_device},
-        {"Ensoniq AudioPCI (ES1371)", "es1371",    &es1371_device},
-        {"Sound Blaster PCI 128",     "sbpci128",  &es1371_device},
+        {"None",                                        "none",      NULL},
+        {"Adlib",                                       "adlib",     &adlib_device},
+        {"Adlib",                                       "adlib_mca", &adlib_mca_device},
+        {"Sound Blaster 1.0",                           "sb",        &sb_1_device},
+        {"Sound Blaster 1.5",                           "sb1.5",     &sb_15_device},
+        {"Sound Blaster MCV",                           "sbmcv",     &sb_mcv_device},
+        {"Sound Blaster 2.0",                           "sb2.0",     &sb_2_device},
+        {"Sound Blaster Pro v1",                        "sbprov1",   &sb_pro_v1_device},
+        {"Sound Blaster Pro v2",                        "sbprov2",   &sb_pro_v2_device},
+        {"Sound Blaster Pro MCV",                       "sbpromcv",  &sb_pro_mcv_device},
+        {"Sound Blaster 16",                            "sb16",      &sb_16_device},
+        {"Sound Blaster AWE32",                         "sbawe32",   &sb_awe32_device},
+        {"Adlib Gold",                                  "adlibgold", &adgold_device},
+        {"Windows Sound System",                        "wss",       &wss_device},        
+        {"Aztech Sound Galaxy Pro 16 AB (Washington)",  "azt2316a",  &azt2316a_device},
+        {"Aztech Sound Galaxy Nova 16 Extra (Clinton)", "azt1605",   &azt1605_device},
+        {"Pro Audio Spectrum 16",                       "pas16",     &pas16_device},
+        {"Ensoniq AudioPCI (ES1371)",                   "es1371",    &es1371_device},
+        {"Sound Blaster PCI 128",                       "sbpci128",  &es1371_device},
         {"", "", NULL}
 };
 
@@ -114,7 +117,8 @@ static struct
 
 static int sound_handlers_num;
 
-static int sound_poll_time = 0, sound_poll_latch;
+static pc_timer_t sound_poll_timer;
+static uint64_t sound_poll_latch;
 int sound_pos_global = 0;
 
 int soundon = 1;
@@ -226,7 +230,7 @@ void sound_add_handler(void (*get_buffer)(int32_t *buffer, int len, void *p), vo
 static int cd_pos = 0;
 void sound_poll(void *priv)
 {
-        sound_poll_time += sound_poll_latch;
+	timer_advance_u64(&sound_poll_timer, sound_poll_latch);
 
         cd_pos++;
         if (cd_pos == (CD_BUFLEN * 48000) / CD_FREQ)
@@ -269,12 +273,12 @@ void sound_poll(void *priv)
 
 void sound_speed_changed()
 {
-        sound_poll_latch = (int)((double)TIMER_USEC * (1000000.0 / 48000.0));
+        sound_poll_latch = (uint64_t)((double)TIMER_USEC * (1000000.0 / 48000.0));
 }
 
 void sound_reset()
 {
-        timer_add(sound_poll, &sound_poll_time, TIMER_ALWAYS_ENABLED, NULL);
+        timer_add(&sound_poll_timer, sound_poll, NULL, 1);
 
         sound_handlers_num = 0;
         

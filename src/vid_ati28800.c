@@ -140,7 +140,7 @@ void ati28800k_out(uint16_t addr, uint8_t val, void *p)
                 case 0x3DE:
 //                pclog("ati28800k_out : set port 03DE to %02X at %04X:%04X\n", val, CS, cpu_state.oldpc);
                 ati28800->in_get_korean_font_kind_set = 0;
-                if(ati28800->get_korean_font_enabled && (ati28800->regs[0xBF] & 0x20))
+                if(ati28800->get_korean_font_enabled)
                 {
                         if((ati28800->get_korean_font_base & 0x7F) > 0x20 && (ati28800->get_korean_font_base & 0x7F) < 0x7F)
                                 fontdatksc5601_user[(ati28800->get_korean_font_kind & 4) * 24 + (ati28800->get_korean_font_base & 0x7F) - 0x20][ati28800->get_korean_font_index] = val;
@@ -237,7 +237,7 @@ uint8_t ati28800k_in(uint16_t addr, void *p)
         switch (addr)
         {
                 case 0x3DE:
-                if (ati28800->get_korean_font_enabled && (ati28800->regs[0xBF] & 0x20))
+                if (ati28800->get_korean_font_enabled)
                 {
                         switch (ati28800->get_korean_font_kind >> 8)
                         {
@@ -272,20 +272,20 @@ void ati28800_recalctimings(svga_t *svga)
 
         switch (((ati28800->regs[0xbe] & 0x10) >> 1) | ((ati28800->regs[0xb9] & 2) << 1) | ((svga->miscout & 0x0C) >> 2))
         {
-                case 0x00: svga->clock = cpuclock / 42954000.0; break;
-                case 0x01: svga->clock = cpuclock / 48771000.0; break;
-                case 0x03: svga->clock = cpuclock / 36000000.0; break;
-                case 0x04: svga->clock = cpuclock / 50350000.0; break;
-                case 0x05: svga->clock = cpuclock / 56640000.0; break;
-                case 0x07: svga->clock = cpuclock / 44900000.0; break;
-                case 0x08: svga->clock = cpuclock / 30240000.0; break;
-                case 0x09: svga->clock = cpuclock / 32000000.0; break;
-                case 0x0A: svga->clock = cpuclock / 37500000.0; break;
-                case 0x0B: svga->clock = cpuclock / 39000000.0; break;
-                case 0x0C: svga->clock = cpuclock / 40000000.0; break;
-                case 0x0D: svga->clock = cpuclock / 56644000.0; break;
-                case 0x0E: svga->clock = cpuclock / 75000000.0; break;
-                case 0x0F: svga->clock = cpuclock / 65000000.0; break;
+                case 0x00: svga->clock = (cpuclock * (double)(1ull << 32)) / 42954000.0; break;
+                case 0x01: svga->clock = (cpuclock * (double)(1ull << 32)) / 48771000.0; break;
+                case 0x03: svga->clock = (cpuclock * (double)(1ull << 32)) / 36000000.0; break;
+                case 0x04: svga->clock = (cpuclock * (double)(1ull << 32)) / 50350000.0; break;
+                case 0x05: svga->clock = (cpuclock * (double)(1ull << 32)) / 56640000.0; break;
+                case 0x07: svga->clock = (cpuclock * (double)(1ull << 32)) / 44900000.0; break;
+                case 0x08: svga->clock = (cpuclock * (double)(1ull << 32)) / 30240000.0; break;
+                case 0x09: svga->clock = (cpuclock * (double)(1ull << 32)) / 32000000.0; break;
+                case 0x0A: svga->clock = (cpuclock * (double)(1ull << 32)) / 37500000.0; break;
+                case 0x0B: svga->clock = (cpuclock * (double)(1ull << 32)) / 39000000.0; break;
+                case 0x0C: svga->clock = (cpuclock * (double)(1ull << 32)) / 40000000.0; break;
+                case 0x0D: svga->clock = (cpuclock * (double)(1ull << 32)) / 56644000.0; break;
+                case 0x0E: svga->clock = (cpuclock * (double)(1ull << 32)) / 75000000.0; break;
+                case 0x0F: svga->clock = (cpuclock * (double)(1ull << 32)) / 65000000.0; break;
                 default: break;
         }
         if (ati28800->regs[0xb8] & 0x40)
@@ -295,15 +295,6 @@ void ati28800_recalctimings(svga_t *svga)
                 svga->hdisp <<= 1;
                 svga->htotal <<= 1;
                 svga->rowoffset <<= 1;
-        }
-
-        if (svga->crtc[0x17] & 4)
-        {
-                svga->vtotal <<= 1;
-                svga->dispend <<= 1;
-                svga->vsyncstart <<= 1;
-                svga->split <<= 1;
-                svga->vblankstart <<= 1;
         }
 
         if (!svga->scrblank && (ati28800->regs[0xb0] & 0x20)) /*Extended 256 colour modes*/
@@ -364,7 +355,7 @@ void *ati28800k_init()
         ati28800->ksc5601_mode_enabled = 0;
         
         rom_init(&ati28800->bios_rom, "atikorvga.bin", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
-        loadfont("ati_ksc5601.rom", 6);
+        loadfont("ati_ksc5601.rom", FONT_KSC5601);
         
         svga_init(&ati28800->svga, ati28800, 1 << 19, /*512kb*/
                    ati28800k_recalctimings,
@@ -376,8 +367,42 @@ void *ati28800k_init()
         io_sethandler(0x03c0, 0x0020, ati28800k_in, NULL, NULL, ati28800k_out, NULL, NULL, ati28800);
 
         ati28800->svga.miscout = 1;
+        ati28800->svga.ksc5601_sbyte_mask = 0;
 
         ati_eeprom_load(&ati28800->eeprom, "atikorvga.nvr", 0);
+
+        return ati28800;
+}
+
+void *ati28800k_spc4620p_init()
+{
+        ati28800_t *ati28800 = malloc(sizeof(ati28800_t));
+        memset(ati28800, 0, sizeof(ati28800_t));
+
+        ati28800->port_03dd_val = 0;
+        ati28800->get_korean_font_base = 0;
+        ati28800->get_korean_font_index = 0;
+        ati28800->get_korean_font_enabled = 0;
+        ati28800->get_korean_font_kind = 0;
+        ati28800->in_get_korean_font_kind_set = 0;
+        ati28800->ksc5601_mode_enabled = 0;
+
+        rom_init_interleaved(&ati28800->bios_rom, "spc4620p/31005h.u8", "spc4620p/31005h.u10", 0xc0000, 0x8000, 0x7fff, 0, MEM_MAPPING_EXTERNAL);
+        loadfont("spc4620p/svb6120a_font.rom", 6);
+        
+        svga_init(&ati28800->svga, ati28800, 1 << 19, /*512kb*/
+                   ati28800k_recalctimings,
+                   ati28800k_in, ati28800k_out,
+                   NULL,
+                   NULL);
+
+        io_sethandler(0x01ce, 0x0002, ati28800k_in, NULL, NULL, ati28800k_out, NULL, NULL, ati28800);
+        io_sethandler(0x03c0, 0x0020, ati28800k_in, NULL, NULL, ati28800k_out, NULL, NULL, ati28800);
+
+        ati28800->svga.miscout = 1;
+        ati28800->svga.ksc5601_sbyte_mask = 0;
+
+        ati_eeprom_load(&ati28800->eeprom, "svb6120a.nvr", 0);
 
         return ati28800;
 }
@@ -452,6 +477,18 @@ device_t ati28800k_device =
         ati28800k_init,
         ati28800_close,
         ati28800k_available,
+        ati28800_speed_changed,
+        ati28800_force_redraw,
+        ati28800k_add_status_info
+};
+
+device_t ati28800k_spc4620p_device =
+{
+        "SVB-6120A",
+        0,
+        ati28800k_spc4620p_init,
+        ati28800_close,
+        NULL,
         ati28800_speed_changed,
         ati28800_force_redraw,
         ati28800k_add_status_info

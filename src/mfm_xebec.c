@@ -1,6 +1,12 @@
 #define _LARGEFILE_SOURCE
 #define _LARGEFILE64_SOURCE
 #define _GNU_SOURCE
+#ifdef __APPLE__
+#define off64_t off_t
+#define fopen64 fopen
+#define fseeko64 fseek
+#define ftello64 ftell
+#endif
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -23,7 +29,7 @@
 
 #define XEBEC_TIME (2000 * TIMER_USEC)
 
-extern char ide_fn[4][512];
+extern char ide_fn[7][512];
 
 enum
 {
@@ -51,7 +57,7 @@ typedef struct xebec_t
 {
         rom_t bios_rom;
         
-        int callback;
+        pc_timer_t callback_timer;
         
         int state;
         
@@ -143,7 +149,7 @@ static uint8_t xebec_read(uint16_t port, void *p)
 //                                pclog("Read all data\n");
                                 xebec->status = STAT_BSY;
                                 xebec->state = STATE_SENT_DATA;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         }
                         break;
                                 
@@ -190,7 +196,7 @@ static void xebec_write(uint16_t port, uint8_t val, void *p)
                         {
                                 xebec->status = STAT_BSY;
                                 xebec->state = STATE_START_COMMAND;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
 //                                pclog("Command %02x\n", xebec->command[0]);
                         }
                         break;
@@ -207,7 +213,7 @@ static void xebec_write(uint16_t port, uint8_t val, void *p)
 //                                pclog("Got data\n");
                                 xebec->status = STAT_BSY;
                                 xebec->state = STATE_RECEIVED_DATA;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         }
                         break;                                
                         
@@ -314,13 +320,11 @@ static void xebec_callback(void *p)
         xebec_t *xebec = (xebec_t *)p;
         mfm_drive_t *drive;
         
-        xebec->callback = 0;
-        
         xebec->drive_sel = (xebec->command[1] & 0x20) ? 1 : 0;
         xebec->completion_byte = xebec->drive_sel & 0x20;
         
         drive = &xebec->drives[xebec->drive_sel];
-        
+
         switch (xebec->command[0])
         {
                 case CMD_TEST_DRIVE_READY:
@@ -448,7 +452,7 @@ static void xebec_callback(void *p)
                                 readflash_set(READFLASH_HDC, xebec->drive_sel);
                         }
                         if (xebec->irq_dma_mask & DMA_ENA)
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         else
                         {
                                 xebec->status = STAT_BSY | STAT_IO | STAT_REQ;
@@ -468,12 +472,12 @@ static void xebec_callback(void *p)
                                         {
                                                 pclog("CMD_READ_SECTORS out of data!\n");
                                                 xebec->status = STAT_BSY | STAT_CD | STAT_IO | STAT_REQ;
-                                                xebec->callback = XEBEC_TIME;
+                                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                                                 return;
                                         }
                                 }
                                 xebec->state = STATE_SENT_DATA;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         }
                         else
                                 fatal("Read sectors no DMA! - shouldn't get here\n");
@@ -505,7 +509,7 @@ static void xebec_callback(void *p)
                                 xebec->state = STATE_SEND_DATA;
                                 
                                 if (xebec->irq_dma_mask & DMA_ENA)
-                                        xebec->callback = XEBEC_TIME;
+                                        timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                                 else
                                 {
                                         xebec->status = STAT_BSY | STAT_IO | STAT_REQ;
@@ -535,7 +539,7 @@ static void xebec_callback(void *p)
                         xebec->data_pos = 0;
                         xebec->data_len = 512;
                         if (xebec->irq_dma_mask & DMA_ENA)
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         else
                                 xebec->status = STAT_BSY | STAT_REQ;
                         break;
@@ -552,7 +556,7 @@ static void xebec_callback(void *p)
                                         {
                                                 pclog("CMD_WRITE_SECTORS out of data!\n");
                                                 xebec->status = STAT_BSY | STAT_CD | STAT_IO | STAT_REQ;
-                                                xebec->callback = XEBEC_TIME;
+                                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                                                 return;
                                         }
                                                 
@@ -560,7 +564,7 @@ static void xebec_callback(void *p)
                                 }
 
                                 xebec->state = STATE_RECEIVED_DATA;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         }
                         else
                                 fatal("Write sectors no DMA! - should never get here\n");
@@ -595,7 +599,7 @@ static void xebec_callback(void *p)
                         {
                                 xebec->state = STATE_RECEIVE_DATA;
                                 if (xebec->irq_dma_mask & DMA_ENA)
-                                        xebec->callback = XEBEC_TIME;
+                                        timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                                 else
                                         xebec->status = STAT_BSY | STAT_REQ;
                         }
@@ -653,7 +657,7 @@ static void xebec_callback(void *p)
                         xebec->data_pos = 0;
                         xebec->data_len = 512;
                         if (xebec->irq_dma_mask & DMA_ENA)
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         else
                                 xebec->status = STAT_BSY | STAT_REQ;
                         break;
@@ -671,7 +675,7 @@ static void xebec_callback(void *p)
                                         {
                                                 pclog("CMD_WRITE_SECTOR_BUFFER out of data!\n");
                                                 xebec->status = STAT_BSY | STAT_CD | STAT_IO | STAT_REQ;
-                                                xebec->callback = XEBEC_TIME;
+                                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                                                 return;
                                         }
                                         
@@ -679,7 +683,7 @@ static void xebec_callback(void *p)
                                 }
                                 
                                 xebec->state = STATE_RECEIVED_DATA;
-                                xebec->callback = XEBEC_TIME;
+                                timer_set_delay_u64(&xebec->callback_timer, XEBEC_TIME);
                         }
                         else
                                 fatal("CMD_WRITE_SECTOR_BUFFER - should never get here!\n");
@@ -829,7 +833,7 @@ static void *xebec_init()
                 
         io_sethandler(0x0320, 0x0004, xebec_read, NULL, NULL, xebec_write, NULL, NULL, xebec);
 
-        timer_add(xebec_callback, &xebec->callback, &xebec->callback, xebec);
+        timer_add(&xebec->callback_timer, xebec_callback, xebec, 0);
         
         return xebec;
 }
@@ -880,7 +884,7 @@ static void *dtc_5150x_init()
                 
         io_sethandler(0x0320, 0x0004, xebec_read, NULL, NULL, xebec_write, NULL, NULL, xebec);
 
-        timer_add(xebec_callback, &xebec->callback, &xebec->callback, xebec);
+        timer_add(&xebec->callback_timer, xebec_callback, xebec, 0);
         
         return xebec;
 }

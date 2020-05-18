@@ -1,3 +1,10 @@
+#ifdef __APPLE__
+#define off64_t off_t
+#define fopen64 fopen
+#define fseeko64 fseek
+#define ftello64 ftell
+#endif
+
 #include "wx-utils.h"
 #include "wx-sdl2.h"
 #include "wx-joystickconfig.h"
@@ -46,10 +53,14 @@ static int new_zip_channel;
 
 extern int pause;
 
+static int memspin_old;
+
 extern void deviceconfig_open(void* hwnd, device_t *device);
 extern int hdconf_init(void* hdlg);
 extern int hdconf_update(void* hdlg);
 
+static int hdd_controller_selected_is_ide(void* hdlg);
+static int hdd_controller_selected_is_scsi(void* hdlg);
 static int hdd_controller_selected_has_config(void *hdlg);
 static device_t *hdd_controller_selected_get_device(void *hdlg);
 
@@ -76,12 +87,40 @@ static int mouse_valid(int type, int model)
         return FALSE;
 }*/
 
+static void recalc_fpu_list(void *hdlg, int model, int manu, int cpu, int fpu)
+{
+        void *h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOFPU"));
+        int c = 0;
+        
+        wx_sendmessage(h, WX_CB_RESETCONTENT, 0, 0);
+        wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0);
+
+        while (1)
+        {
+                const char *name = fpu_get_name_from_index(model, manu, cpu, c);
+                int type = fpu_get_type_from_index(model, manu, cpu, c);
+                if (!name)
+                        break;
+
+                wx_sendmessage(h, WX_CB_ADDSTRING, 0, (LONG_PARAM)name);
+                if (!c || type == fpu)
+                        wx_sendmessage(h, WX_CB_SETCURSEL, c, 0);
+
+                c++;
+        }
+        if (c > 1)
+                wx_enablewindow(h, TRUE);
+        else
+                wx_enablewindow(h, FALSE);
+}
+
 static void recalc_vid_list(void* hdlg, int model, int force_builtin_video)
 {
         void* h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOVID"));
         int c = 0, d = 0;
         int found_card = 0;
         int cur_gfxcard = gfxcard;
+        int romset = model_getromset_from_model(model);
 
         wx_sendmessage(h, WX_CB_RESETCONTENT, 0, 0);
         wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0);
@@ -92,7 +131,7 @@ static void recalc_vid_list(void* hdlg, int model, int force_builtin_video)
                 wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0);
                 wx_enablewindow(h, FALSE);
                 h = wx_getdlgitem(hdlg, WX_ID("IDC_CONFIGUREVID"));
-                wx_enablewindow(h, FALSE);
+                wx_enablewindow(h, video_card_has_config(gfxcard, romset));
                 return;
         }
 
@@ -108,6 +147,9 @@ static void recalc_vid_list(void* hdlg, int model, int force_builtin_video)
                 d++;
         }
         
+        if (cur_gfxcard == GFX_BUILTIN && !model_has_fixed_gfx(model) && !model_has_optional_gfx(model))
+                cur_gfxcard = 0;
+        
         while (1)
         {
                 char *s = video_card_getname(c);
@@ -116,7 +158,10 @@ static void recalc_vid_list(void* hdlg, int model, int force_builtin_video)
                         break;
 
                 if (video_card_available(c) && gfx_present[video_new_to_old(c)] &&
-                    ((models[model].flags & MODEL_PCI) || !(video_card_getdevice(c)->flags & DEVICE_PCI)))
+                    ((models[model].flags & MODEL_PCI) || !(video_card_getdevice(c, romset)->flags & DEVICE_PCI)) &&
+                    ((models[model].flags & MODEL_MCA) || !(video_card_getdevice(c, romset)->flags & DEVICE_MCA)) &&
+                    (!(models[model].flags & MODEL_MCA) || (video_card_getdevice(c, romset)->flags & DEVICE_MCA))
+                    )
                 {
                         wx_sendmessage(h, WX_CB_ADDSTRING, 0, (LONG_PARAM)s);
                         if (video_new_to_old(c) == gfxcard && !found_card)
@@ -135,7 +180,7 @@ static void recalc_vid_list(void* hdlg, int model, int force_builtin_video)
         wx_enablewindow(h, TRUE);
 
         h = wx_getdlgitem(hdlg, WX_ID("IDC_CONFIGUREVID"));
-        if (video_card_has_config(video_old_to_new(cur_gfxcard)))
+        if (video_card_has_config(video_old_to_new(cur_gfxcard), romset))
                 wx_enablewindow(h, TRUE);
         else
                 wx_enablewindow(h, FALSE);
@@ -326,12 +371,64 @@ static void recalc_hdd_list(void* hdlg, int model, int use_selected_hdd, int for
         }
 }
 
-static void recalc_cd_list(void *hdlg, int cur_speed)
+// TODO: split this into model/speed recalcs?
+static void recalc_cd_list(void *hdlg, int cur_speed, char *cur_model)
 {
-        void *h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDSPEED"));
+        int temp_model = -1;
+        void *h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDMODEL"));
         int c = 0;
-        
+        int found = 0;
+
         wx_sendmessage(h, WX_CB_RESETCONTENT, 0, 0);
+        if (hdd_controller_selected_is_ide(hdlg) || hdd_controller_selected_is_scsi(hdlg))
+                wx_enablewindow(h, TRUE);
+        else
+                wx_enablewindow(h, FALSE);
+        while (1)
+        {
+                char s[40];
+                char *model;
+
+                if ((cd_get_model_interfaces(c) == CD_MODEL_INTERFACE_ALL) ||
+                    (cd_get_model_interfaces(c) == CD_MODEL_INTERFACE_IDE && hdd_controller_selected_is_ide(hdlg)) ||
+                    (cd_get_model_interfaces(c) == CD_MODEL_INTERFACE_SCSI && hdd_controller_selected_is_scsi(hdlg)))
+                {
+
+                        model = cd_get_model(c);
+                        sprintf(s, "%s", model);
+                        wx_sendmessage(h, WX_CB_ADDSTRING, 0, (LONG_PARAM)s);
+
+                        if (!strncmp(s, cur_model, 40))
+                        {
+                                wx_sendmessage(h, WX_CB_SETCURSEL, c, 0);
+                                temp_model = c;
+                                found = 1;
+                        }
+                }
+
+                c++;
+                if (c > MAX_CD_MODEL)
+                        break;
+        }
+        if (!found)
+                wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0); // assume that there is always at least one TODO: is this necessary?
+
+
+        h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDSPEED"));
+        c = 0;
+        found = 0;
+
+        wx_sendmessage(h, WX_CB_RESETCONTENT, 0, 0);
+        if (temp_model >= 0 && cd_get_model_speed(temp_model) != -1)
+        {
+                // this model has a specific speed
+                wx_enablewindow(h, FALSE);
+                cur_speed = cd_get_model_speed(temp_model);
+        }
+        else if (hdd_controller_selected_is_ide(hdlg) || hdd_controller_selected_is_scsi(hdlg))
+                wx_enablewindow(h, TRUE);
+        else
+                wx_enablewindow(h, FALSE);
         while (1)
         {
                 char s[8];
@@ -342,12 +439,17 @@ static void recalc_cd_list(void *hdlg, int cur_speed)
                 wx_sendmessage(h, WX_CB_ADDSTRING, 0, (LONG_PARAM)s);
                 
                 if (speed == cur_speed)
+                {
                         wx_sendmessage(h, WX_CB_SETCURSEL, c, 0);
-                
+                        found = 1;
+                }
+
                 c++;
                 if (speed >= MAX_CD_SPEED)
                         break;
         }
+        if (!found)
+                wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0); // fall back TODO: is this necessary?
 }
 
 #ifdef USE_NETWORKING
@@ -401,8 +503,8 @@ int config_dlgsave(void* hdlg)
         char temp_str[256];
         void* h;
         int c;
-        int gfx, fpu;
-        int temp_cpu, temp_cpu_m, temp_model;
+        int gfx;//, fpu;
+        int temp_cpu, temp_cpu_m, temp_model, temp_fpu;
         int temp_GAMEBLASTER, temp_GUS, temp_SSI2001, temp_voodoo, temp_sound_card_current;
         int temp_dynarec;
         int temp_fda_type, temp_fdb_type;
@@ -438,8 +540,11 @@ int config_dlgsave(void* hdlg)
         temp_cpu_m = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
         h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO3"));
         temp_cpu = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
-        fpu = (models[temp_model].cpu[temp_cpu_m].cpus[temp_cpu].cpu_type
-        >= CPU_i486DX) ? 1 : 0;
+//        fpu = (models[temp_model].cpu[temp_cpu_m].cpus[temp_cpu].cpu_type
+//        >= CPU_i486DX) ? 1 : 0;
+
+        h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOFPU"));
+        temp_fpu = fpu_get_type_from_index(temp_model, temp_cpu_m, temp_cpu, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
 
         h = wx_getdlgitem(hdlg, WX_ID("IDC_CHECK3"));
         temp_GAMEBLASTER = wx_sendmessage(h, WX_BM_GETCHECK, 0, 0);
@@ -486,8 +591,8 @@ int config_dlgsave(void* hdlg)
         temp_network_card = settings_list_to_network[wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0)];
 #endif                        
 
-        if (temp_model != model || gfx != gfxcard || mem != mem_size ||
-            fpu != hasfpu || temp_GAMEBLASTER != GAMEBLASTER || temp_GUS != GUS ||
+        if (temp_model != model || gfx != gfxcard || mem != mem_size || temp_fpu != fpu_type ||
+            temp_GAMEBLASTER != GAMEBLASTER || temp_GUS != GUS ||
             temp_SSI2001 != SSI2001 || temp_sound_card_current != sound_card_current ||
             temp_voodoo != voodoo_enabled || temp_dynarec != cpu_use_dynarec ||
             temp_fda_type != fdd_get_type(0) || temp_fdb_type != fdd_get_type(1) ||
@@ -507,6 +612,7 @@ int config_dlgsave(void* hdlg)
                         mem_size = mem;
                         cpu_manufacturer = temp_cpu_m;
                         cpu = temp_cpu;
+                        fpu_type = temp_fpu;
                         GAMEBLASTER = temp_GAMEBLASTER;
                         GUS = temp_GUS;
                         SSI2001 = temp_SSI2001;
@@ -553,7 +659,7 @@ int config_dlgsave(void* hdlg)
 
                         if (has_been_inited)
                         {
-                                mem_resize();
+                                mem_alloc();
                                 loadbios();
                                 resetpchard();
                         }
@@ -577,6 +683,10 @@ int config_dlgsave(void* hdlg)
         cd_speed = cd_get_speed(wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
         cd_set_speed(cd_speed);
 
+        h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDMODEL"));
+        cd_model = cd_get_model(wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
+        cd_set_model(cd_model);
+
         if (has_been_inited)
                 saveconfig(NULL);
 
@@ -596,11 +706,12 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
         void* h;
         int c, d;
         int gfx, mem;
-        int temp_cpu, temp_cpu_m, temp_model;
+        int temp_cpu, temp_cpu_m, temp_model, temp_fpu;
         int temp_sound_card_current;
         int temp_dynarec;
         int cpu_flags;
         int cpu_type;
+        int temp_cd_model, temp_cd_speed;
         int temp_mouse_type;
 #ifdef USE_NETWORKING
         int temp_network_card;
@@ -661,6 +772,8 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                         wx_enablewindow(h, TRUE);
                         wx_sendmessage(h, WX_CB_SETCURSEL, cpu, 0);
 
+                        recalc_fpu_list(hdlg, romstomodel[romset], cpu_manufacturer, cpu, fpu_type);
+
                         recalc_snd_list(hdlg, romstomodel[romset]);
 
                         h = wx_getdlgitem(hdlg, WX_ID("IDC_CHECK3"));
@@ -706,9 +819,15 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                         | models[romstomodel[romset]].max_ram);
                         wx_sendmessage(h, WX_UDM_SETINCR, 0, models[model].ram_granularity);
                         if (!((models[model].flags & MODEL_AT) && models[model].ram_granularity < 128))
+                        {
                                 wx_sendmessage(h, WX_UDM_SETPOS, 0, mem_size);
+                                memspin_old = mem_size;
+                        }
                         else
+                        {
                                 wx_sendmessage(h, WX_UDM_SETPOS, 0, mem_size / 1024);
+                                memspin_old = mem_size / 1024;
+                        }
 
                         h = wx_getdlgitem(hdlg, WX_ID("IDC_CONFIGUREMOD"));
                         if (model_getdevice(model))
@@ -853,7 +972,7 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                         wx_sendmessage(h, WX_CB_SETCURSEL, 0, 0);
                         }
                         
-                        recalc_cd_list(hdlg, cd_speed);
+                        recalc_cd_list(hdlg, cd_speed, cd_model);
 
 #ifdef USE_NETWORKING
                         recalc_net_list(hdlg, romstomodel[romset]);
@@ -922,6 +1041,10 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                         temp_cpu = c - 1;
                                 wx_sendmessage(h, WX_CB_SETCURSEL, temp_cpu, 0);
 
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOFPU"));
+                                temp_fpu = fpu_get_type_from_index(temp_model, temp_cpu_m, temp_cpu, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
+                                recalc_fpu_list(hdlg, temp_model, temp_cpu_m, temp_cpu, temp_fpu);
+                        
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_CHECKDYNAREC"));
                                 temp_dynarec = wx_sendmessage(h, WX_BM_GETCHECK, 0, 0);
 
@@ -1004,6 +1127,12 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
 
                                 recalc_hdd_list(hdlg, temp_model, 1, force_ide);
 
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDMODEL"));
+                                temp_cd_model = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDSPEED"));
+                                temp_cd_speed = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                recalc_cd_list(hdlg, cd_get_speed(temp_cd_speed), cd_get_model(temp_cd_model));
+
                                 recalc_snd_list(hdlg, temp_model);
 #ifdef USE_NETWORKING
                                 recalc_net_list(hdlg, temp_model);
@@ -1030,6 +1159,10 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                 if (temp_cpu >= c)
                                 temp_cpu = c - 1;
                                 wx_sendmessage(h, WX_CB_SETCURSEL, temp_cpu, 0);
+
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOFPU"));
+                                temp_fpu = fpu_get_type_from_index(temp_model, temp_cpu_m, temp_cpu, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
+                                recalc_fpu_list(hdlg, temp_model, temp_cpu_m, temp_cpu, temp_fpu);
 
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_CHECKDYNAREC"));
                                 temp_dynarec = wx_sendmessage(h, WX_BM_GETCHECK, 0, 0);
@@ -1063,6 +1196,10 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO3"));
                                 temp_cpu = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
 
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOFPU"));
+                                temp_fpu = fpu_get_type_from_index(temp_model, temp_cpu_m, temp_cpu, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0));
+                                recalc_fpu_list(hdlg, temp_model, temp_cpu_m, temp_cpu, temp_fpu);
+
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_CHECKDYNAREC"));
                                 temp_dynarec = wx_sendmessage(h, WX_BM_GETCHECK, 0, 0);
 
@@ -1095,11 +1232,11 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                         else if (wParam == WX_ID("IDC_CONFIGUREVID"))
                         {
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOVID"));
-                                wx_sendmessage(h, WX_CB_GETLBTEXT, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0),
-                                (LONG_PARAM) temp_str);
+                                wx_sendmessage(h, WX_CB_GETLBTEXT, wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0), (LONG_PARAM) temp_str);
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO1"));
+                                temp_model = listtomodel[wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0)];
 
-                                deviceconfig_open(hdlg,
-                                (void *) video_card_getdevice(video_card_getid(temp_str)));
+                                deviceconfig_open(hdlg, (void *)video_card_getdevice(video_card_getid(temp_str), model_getromset_from_model(temp_model)));
                         }
                         else if (wParam == WX_ID("IDC_COMBOVID"))
                         {
@@ -1112,7 +1249,7 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                 gfx = video_card_getid(temp_str);
 
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_CONFIGUREVID"));
-                                if (video_card_has_config(gfx) && !model_has_fixed_gfx(temp_model))
+                                if (video_card_has_config(gfx, model_getromset_from_model(temp_model)))
                                         wx_enablewindow(h, TRUE);
                                 else
                                         wx_enablewindow(h, FALSE);
@@ -1146,10 +1283,24 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO1"));
                                 temp_model = listtomodel[wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0)];
                                 recalc_hdd_list(hdlg, temp_model, 1, 0);
+
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDMODEL"));
+                                temp_cd_model = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDSPEED"));
+                                temp_cd_speed = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                recalc_cd_list(hdlg, cd_get_speed(temp_cd_speed), cd_get_model(temp_cd_model));
                         }
                         else if (wParam == WX_ID("IDC_CONFIGUREHDD"))
                         {
                                 deviceconfig_open(hdlg, (void *)hdd_controller_selected_get_device(hdlg));
+                        }
+                        else if (wParam == WX_ID("IDC_COMBO_CDMODEL"))
+                        {
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDMODEL"));
+                                temp_cd_model = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBO_CDSPEED"));
+                                temp_cd_speed = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+                                recalc_cd_list(hdlg, cd_get_speed(temp_cd_speed), cd_get_model(temp_cd_model));
                         }
 #ifdef USE_NETWORKING
                         else if (wParam == WX_ID("IDC_COMBO_NETCARD"))
@@ -1235,20 +1386,18 @@ int config_dlgproc(void* hdlg, int message, INT_PARAM wParam, LONG_PARAM lParam)
 
                                 h = wx_getdlgitem(hdlg, WX_ID("IDC_MEMSPIN"));
                                 mem = wx_sendmessage(h, WX_UDM_GETPOS, 0, 0);
-                                if (mem & granularity_mask)
+                                if (mem < memspin_old)
                                 {
-                                        if ((mem & granularity_mask) < (granularity / 2))
-                                        {
-                                                /*Assume increase*/
-                                                mem = (mem + granularity_mask) & ~granularity_mask;
-                                        }
-                                        else
-                                        {
-                                                /*Assumg decrease*/
-                                                mem &= ~granularity_mask;
-                                        }
-                                        mem = wx_sendmessage(h, WX_UDM_SETPOS, 0, mem);
+                                        /*Assume decrease*/
+                                        mem &= ~granularity_mask;
                                 }
+                                else
+                                {
+                                        /*Assume increase*/
+                                        mem = (mem + granularity_mask) & ~granularity_mask;
+                                }
+                                wx_sendmessage(h, WX_UDM_SETPOS, 0, mem);
+                                memspin_old = mem;
                         }
 #endif
                         return 0;
@@ -1283,6 +1432,22 @@ static int hdd_controller_selected_is_mfm(void* hdlg)
         int c = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
         if (hdd_names[c])
                 return hdd_controller_is_mfm(hdd_names[c]);
+        return 0;
+}
+static int hdd_controller_selected_is_ide(void* hdlg)
+{
+        void* h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOHDD"));
+        int c = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+        if (hdd_names[c])
+                return hdd_controller_is_ide(hdd_names[c]);
+        return 0;
+}
+static int hdd_controller_selected_is_scsi(void* hdlg)
+{
+        void* h = wx_getdlgitem(hdlg, WX_ID("IDC_COMBOHDD"));
+        int c = wx_sendmessage(h, WX_CB_GETCURSEL, 0, 0);
+        if (hdd_names[c])
+                return hdd_controller_is_scsi(hdd_names[c]);
         return 0;
 }
 static int hdd_controller_selected_has_config(void* hdlg)

@@ -1,6 +1,12 @@
 #define _LARGEFILE_SOURCE
 #define _LARGEFILE64_SOURCE
 #define _GNU_SOURCE
+#ifdef __APPLE__
+#define off64_t off_t
+#define fopen64 fopen
+#define fseeko64 fseek
+#define ftello64 ftell
+#endif
 #include <errno.h>
 
 #include "ibm.h"

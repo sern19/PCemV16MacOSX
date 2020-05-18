@@ -53,6 +53,8 @@ void svga_out(uint16_t addr, uint8_t val, void *p)
                 }
                 else
                 {
+                        if ((svga->attraddr == 0x13) && (svga->attrregs[0x13] != val))
+                                svga->fullchange = changeframecount;
                         svga->attrregs[svga->attraddr & 31] = val;
                         if (svga->attraddr < 16) 
                                 svga->fullchange = changeframecount;
@@ -416,13 +418,14 @@ void svga_recalctimings(svga_t *svga)
         
         svga->linedbl = svga->crtc[9] & 0x80;
         svga->rowcount = svga->crtc[9] & 31;
+        svga->char_width = (svga->seqregs[1] & 1) ? 8 : 9;
         if (svga->recalctimings_ex) 
                 svga->recalctimings_ex(svga);
 
         if (svga->vblankstart < svga->dispend)
                 svga->dispend = svga->vblankstart;
 
-        crtcconst = (svga->seqregs[1] & 1) ? (svga->clock * 8.0) : (svga->clock * 9.0);
+        crtcconst = svga->clock * svga->char_width;
 
         disptime  = svga->htotal;
         _dispontime = svga->hdisp_time;
@@ -433,8 +436,12 @@ void svga_recalctimings(svga_t *svga)
         _dispontime *= crtcconst;
         _dispofftime *= crtcconst;
 
-	svga->dispontime = (int)(_dispontime * (1 << TIMER_SHIFT));
-	svga->dispofftime = (int)(_dispofftime * (1 << TIMER_SHIFT));
+	svga->dispontime = (uint64_t)_dispontime;
+	svga->dispofftime = (uint64_t)_dispofftime;
+	if (svga->dispontime < TIMER_USEC)
+        	svga->dispontime = TIMER_USEC;
+	if (svga->dispofftime < TIMER_USEC)
+        	svga->dispofftime = TIMER_USEC;
 /*        printf("SVGA horiz total %i display end %i vidclock %f\n",svga->crtc[0],svga->crtc[1],svga->clock);
         printf("SVGA vert total %i display end %i max row %i vsync %i\n",svga->vtotal,svga->dispend,(svga->crtc[9]&31)+1,svga->vsyncstart);
         printf("total %f on %i cycles off %i cycles frame %i sec %i %02X\n",disptime*crtcconst,svga->dispontime,svga->dispofftime,(svga->dispontime+svga->dispofftime)*svga->vtotal,(svga->dispontime+svga->dispofftime)*svga->vtotal*70,svga->seqregs[1]);
@@ -478,7 +485,7 @@ void svga_poll(void *p)
                         svga->overlay_oddeven = 1;
                 }
 
-                svga->vidtime += svga->dispofftime;
+                timer_advance_u64(&svga->timer, svga->dispofftime);
 //                if (output) printf("Display off %f\n",vidtime);
                 svga->cgastat |= 1;
                 svga->linepos = 1;
@@ -540,7 +547,7 @@ void svga_poll(void *p)
         else
         {
 //                pclog("VC %i ma %05X\n", svga->vc, svga->ma);
-                svga->vidtime += svga->dispontime;
+                timer_advance_u64(&svga->timer, svga->dispontime);
 
 //                if (output) printf("Display on %f\n",vidtime);
                 if (svga->dispon) 
@@ -576,15 +583,29 @@ void svga_poll(void *p)
                                 svga->ma = svga->maback;
                         }
                 }
+                svga->hsync_divisor = !svga->hsync_divisor;
+                
+                if (svga->hsync_divisor && (svga->crtc[0x17] & 4))
+                        return;
+
                 svga->vc++;
                 svga->vc &= 2047;
 
                 if (svga->vc == svga->split)
                 {
-//                        pclog("VC split\n");
-                        svga->ma = svga->maback = 0;
-                        if (svga->attrregs[0x10] & 0x20) 
-                                svga->scrollcache = 0;
+                        int ret = 1;
+                        
+                        if (svga->line_compare)
+                                ret = svga->line_compare(svga);
+                                
+                        if (ret)
+                        {
+//                               pclog("VC split\n");
+                                svga->ma = svga->maback = 0;
+                                svga->sc = 0;
+                                if (svga->attrregs[0x10] & 0x20)
+                                        svga->scrollcache = 0;
+                        }
                 }
                 if (svga->vc == svga->dispend)
                 {
@@ -650,7 +671,7 @@ void svga_poll(void *p)
 //                        pclog("%i %i %i\n", svga->video_res_x, svga->video_res_y, svga->lowres);
                         if (!(svga->gdcreg[6] & 1) && !(svga->attrregs[0x10] & 1)) /*Text mode*/
                         {
-                                svga->video_res_x /= (svga->seqregs[1] & 1) ? 8 : 9;
+                                svga->video_res_x /= svga->char_width;
                                 svga->video_res_y /= (svga->crtc[9] & 31) + 1;
                                 svga->video_bpp = 0;
                         }
@@ -663,8 +684,12 @@ void svga_poll(void *p)
                                 else if (!(svga->crtc[0x17] & 1))
                                    svga->video_res_y *= 2;
                                 svga->video_res_y /= (svga->crtc[9] & 31) + 1;                                   
-                                if (svga->lowres)
-                                   svga->video_res_x /= 2;
+                                if (svga->render == svga_render_8bpp_lowres ||
+                                    svga->render == svga_render_15bpp_lowres ||
+                                    svga->render == svga_render_16bpp_lowres ||
+                                    svga->render == svga_render_24bpp_lowres ||
+                                    svga->render == svga_render_32bpp_lowres)
+                                        svga->video_res_x /= 2;
 
                                 switch (svga->gdcreg[5] & 0x60)
                                 {
@@ -676,6 +701,9 @@ void svga_poll(void *p)
 //                        if (svga_interlace && oddeven) ma=maback=ma+(svga_rowoffset<<2);
                         
 //                        pclog("Addr %08X vson %03X vsoff %01X  %02X %02X %02X %i %i\n",ma,svga_vsyncstart,crtc[0x11]&0xF,crtc[0xD],crtc[0xC],crtc[0x33], svga_interlace, oddeven);
+
+                        if (svga->vsync_callback)
+                                svga->vsync_callback(svga);
                 }
                 if (svga->vc == svga->vtotal)
                 {
@@ -730,8 +758,8 @@ int svga_init(svga_t *svga, void *p, int memsize,
 
         svga->crtc[0] = 63;
         svga->crtc[6] = 255;
-        svga->dispontime = 1000 * (1 << TIMER_SHIFT);
-        svga->dispofftime = 1000 * (1 << TIMER_SHIFT);        
+        svga->dispontime = 1000ull << 32;
+        svga->dispofftime = 1000ull << 32;
         svga->bpp = 8;
         svga->vram = malloc(memsize);
         svga->vram_max = memsize;
@@ -749,7 +777,7 @@ int svga_init(svga_t *svga, void *p, int memsize,
 
         mem_mapping_add(&svga->mapping, 0xa0000, 0x20000, svga_read, svga_readw, svga_readl, svga_write, svga_writew, svga_writel, NULL, MEM_MAPPING_EXTERNAL, svga);
 
-        timer_add(svga_poll, &svga->vidtime, TIMER_ALWAYS_ENABLED, svga);
+        timer_add(&svga->timer, svga_poll, svga, 1);
         
         svga_pri = svga;
         
@@ -1217,6 +1245,7 @@ uint8_t svga_read_linear(uint32_t addr, void *p)
         svga_t *svga = (svga_t *)p;
         uint8_t temp, temp2, temp3, temp4;
         int readplane = svga->readplane;
+        uint32_t latch_addr = (addr << 2) & svga->decode_mask;
   
         cycles -= video_timing_read_b;
         cycles_lost += video_timing_read_b;
@@ -1241,15 +1270,24 @@ uint8_t svga_read_linear(uint32_t addr, void *p)
 
         addr &= svga->decode_mask;
         
+        if (latch_addr >= svga->vram_max)
+        {
+                svga->la = svga->lb = svga->lc = svga->ld = 0xff;
+        }
+        else
+        {
+                latch_addr &= svga->vram_mask;
+                svga->la = svga->vram[latch_addr];
+                svga->lb = svga->vram[latch_addr | 0x1];
+                svga->lc = svga->vram[latch_addr | 0x2];
+                svga->ld = svga->vram[latch_addr | 0x3];
+        }
+
         if (addr >= svga->vram_max)
                 return 0xff;
                 
         addr &= svga->vram_mask;
 
-        svga->la = svga->vram[addr];
-        svga->lb = svga->vram[addr | 0x1];
-        svga->lc = svga->vram[addr | 0x2];
-        svga->ld = svga->vram[addr | 0x3];
         if (svga->readmode)
         {
                 temp   = svga->la;
@@ -1289,7 +1327,10 @@ void svga_doblit(int y1, int y2, int wx, int wy, svga_t *svga)
                 if (xsize<64) xsize=656;
                 if (ysize<32) ysize=200;
 
-                updatewindowsize(xsize,ysize);
+                if (svga->vertical_linedbl)
+                        updatewindowsize(xsize,ysize*2);
+                else
+                        updatewindowsize(xsize,ysize);
         }
         if (vid_resize)
         {
